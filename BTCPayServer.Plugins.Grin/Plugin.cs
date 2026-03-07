@@ -1,10 +1,10 @@
 using BTCPayServer.Abstractions.Contracts;
 using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Abstractions.Services;
-using BTCPayServer.Plugins.Template.Services;
+using BTCPayServer.Plugins.Grin.Services;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace BTCPayServer.Plugins.Template;
+namespace BTCPayServer.Plugins.Grin;
 
 public class Plugin : BaseBTCPayServerPlugin
 {
@@ -15,14 +15,13 @@ public class Plugin : BaseBTCPayServerPlugin
 
     public override void Execute(IServiceCollection services)
     {
-        services.AddSingleton<IUIExtension>(new UIExtension("TemplatePluginHeaderNav", "header-nav"));
-        services.AddHostedService<ApplicationPartsLogger>();
+        services.AddSingleton<IUIExtension>(new UIExtension("GrinNav", "header-nav"));
         services.AddHostedService<PluginMigrationRunner>();
-        services.AddSingleton<MyPluginService>();
-        services.AddSingleton<MyPluginDbContextFactory>();
-        services.AddDbContext<MyPluginDbContext>((provider, o) =>
+        services.AddSingleton<GrinService>();
+        services.AddSingleton<GrinDbContextFactory>();
+        services.AddDbContext<GrinDbContext>((provider, o) =>
         {
-            var factory = provider.GetRequiredService<MyPluginDbContextFactory>();
+            var factory = provider.GetRequiredService<GrinDbContextFactory>();
             factory.ConfigureBuilder(o);
         });
     }
