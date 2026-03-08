@@ -21,6 +21,7 @@ public class GrinRPCClient
     private string _walletPassword;
     private string _apiSecret;
     private int _requestId;
+    private bool _sessionActive;
 
     public GrinRPCClient(ILogger<GrinRPCClient> logger)
     {
@@ -37,6 +38,8 @@ public class GrinRPCClient
 
     public async Task InitSession()
     {
+        _sessionActive = false;
+
         // 1. Generate ephemeral secp256k1 keypair using NBitcoin
         var privKey = new Key();
         var pubKey = privKey.PubKey;
@@ -63,19 +66,20 @@ public class GrinRPCClient
         if (!tokenResp.TryGetProperty("Ok", out var okToken))
             throw new Exception($"open_wallet failed: {tokenResp}");
         _token = okToken.GetString();
+        _sessionActive = true;
 
         _logger.LogInformation("Grin wallet session opened");
     }
 
     public async Task<JsonElement> GetSlatepackAddress(int derivationIndex = 0)
     {
-        return await RpcEncrypted("get_slatepack_address",
-            new { token = _token, derivation_index = derivationIndex });
+        return await WithAutoReconnect(() => RpcEncrypted("get_slatepack_address",
+            new { token = _token, derivation_index = derivationIndex }));
     }
 
     public async Task<JsonElement> IssueInvoiceTx(long amountNanogrin, string message)
     {
-        return await RpcEncrypted("issue_invoice_tx", new
+        return await WithAutoReconnect(() => RpcEncrypted("issue_invoice_tx", new
         {
             token = _token,
             args = new
@@ -84,76 +88,110 @@ public class GrinRPCClient
                 message,
                 dest_acct_name = (string)null
             }
-        });
+        }));
     }
 
     public async Task<JsonElement> CreateSlatepackMessage(JsonElement slate, int senderIndex = 0)
     {
-        return await RpcEncrypted("create_slatepack_message", new
+        return await WithAutoReconnect(() => RpcEncrypted("create_slatepack_message", new
         {
             token = _token,
             slate,
             sender_index = senderIndex,
             recipients = Array.Empty<string>()
-        });
+        }));
     }
 
     public async Task<JsonElement> DecodeSlatepack(string slatepackMessage)
     {
-        return await RpcEncrypted("slate_from_slatepack_message", new
+        return await WithAutoReconnect(() => RpcEncrypted("slate_from_slatepack_message", new
         {
             token = _token,
             message = slatepackMessage,
             secret_indices = new[] { 0 }
-        });
+        }));
     }
 
     public async Task<JsonElement> FinalizeTx(JsonElement slate)
     {
-        return await RpcEncrypted("finalize_tx", new
+        return await WithAutoReconnect(() => RpcEncrypted("finalize_tx", new
         {
             token = _token,
             slate
-        });
+        }));
     }
 
     public async Task<JsonElement> PostTx(JsonElement slate, bool fluff = false)
     {
-        return await RpcEncrypted("post_tx", new
+        return await WithAutoReconnect(() => RpcEncrypted("post_tx", new
         {
             token = _token,
             slate,
             fluff
-        });
+        }));
     }
 
     public async Task<JsonElement> RetrieveTxs(string txSlateId = null)
     {
-        return await RpcEncrypted("retrieve_txs", new
+        return await WithAutoReconnect(() => RpcEncrypted("retrieve_txs", new
         {
             token = _token,
             refresh_from_node = true,
             tx_id = (int?)null,
             tx_slate_id = txSlateId
-        });
+        }));
     }
 
     public async Task<JsonElement> GetSummaryInfo()
     {
-        return await RpcEncrypted("retrieve_summary_info", new
+        return await WithAutoReconnect(() => RpcEncrypted("retrieve_summary_info", new
         {
             token = _token,
             refresh_from_node = true,
             minimum_confirmations = 1
-        });
+        }));
     }
 
     public async Task<JsonElement> NodeHeight()
     {
-        return await RpcEncrypted("node_height", new
+        return await WithAutoReconnect(() => RpcEncrypted("node_height", new
         {
             token = _token
-        });
+        }));
+    }
+
+    /// <summary>
+    /// Wraps an RPC call with auto-reconnect on session expiry.
+    /// On CryptographicException (stale shared key) or session-related errors,
+    /// re-establishes the ECDH session and retries once.
+    /// </summary>
+    private async Task<JsonElement> WithAutoReconnect(Func<Task<JsonElement>> rpcCall)
+    {
+        try
+        {
+            return await rpcCall();
+        }
+        catch (Exception ex) when (IsSessionError(ex))
+        {
+            _logger.LogWarning("Grin wallet session expired, reconnecting...");
+            await InitSession();
+            return await rpcCall();
+        }
+    }
+
+    private static bool IsSessionError(Exception ex)
+    {
+        // AES-GCM decryption failure = shared key is stale (wallet restarted)
+        if (ex is CryptographicException)
+            return true;
+
+        // Grin RPC errors indicating session problems
+        var msg = ex.Message;
+        if (msg.Contains("InvalidSecretKey") || msg.Contains("InvalidToken") ||
+            msg.Contains("session") || msg.Contains("nonce/body_enc"))
+            return true;
+
+        return false;
     }
 
     private async Task<JsonElement> RpcEncrypted(string method, object paramObj)
