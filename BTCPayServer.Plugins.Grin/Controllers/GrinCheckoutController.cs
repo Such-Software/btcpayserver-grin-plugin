@@ -119,6 +119,9 @@ public class GrinCheckoutController : Controller
         if (invoice.Status == GrinInvoiceStatus.Expired)
             return View("CheckoutExpired", invoice);
 
+        var settings = await _grinService.GetStoreSettings(storeId);
+        ViewBag.MinConfirmations = settings?.MinConfirmations ?? 10;
+        ViewBag.GrinUsdPrice = await _grinService.GetGrinUsdPrice();
         return View("Checkout", invoice);
     }
 

@@ -5,7 +5,10 @@
     var storeId = Model.StoreId;
 }
 
-<h2 class="mb-4">@ViewData["Title"]</h2>
+<h2 class="mb-4">
+    <img src="~/Resources/img/grin-logo.png" alt="" style="width:1.2em;height:1.2em;vertical-align:text-bottom;margin-right:0.25em;" />
+    @ViewData["Title"]
+</h2>
 
 <partial name="_StatusMessage" />
 
@@ -46,3 +49,53 @@
         </form>
     </div>
 </div>
+
+@{
+    var invoices = ViewBag.Invoices as List<BTCPayServer.Plugins.Grin.Data.GrinInvoice> ?? new List<BTCPayServer.Plugins.Grin.Data.GrinInvoice>();
+}
+
+@if (invoices.Any())
+{
+    <h3 class="mt-5 mb-3">Grin Invoices</h3>
+    <div class="table-responsive">
+        <table class="table table-hover">
+            <thead>
+                <tr>
+                    <th>Invoice ID</th>
+                    <th>Amount (GRIN)</th>
+                    <th>Status</th>
+                    <th>Confirmations</th>
+                    <th>Created</th>
+                    <th>Paid</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var inv in invoices)
+                {
+                    var amountGrin = inv.AmountNanogrin / 1_000_000_000m;
+                    var badgeClass = inv.Status switch
+                    {
+                        BTCPayServer.Plugins.Grin.Data.GrinInvoiceStatus.Confirmed => "bg-success",
+                        BTCPayServer.Plugins.Grin.Data.GrinInvoiceStatus.Broadcast => "bg-info",
+                        BTCPayServer.Plugins.Grin.Data.GrinInvoiceStatus.Expired => "bg-secondary",
+                        _ => "bg-warning text-dark"
+                    };
+                    <tr>
+                        <td><code>@inv.Id</code></td>
+                        <td>@amountGrin</td>
+                        <td><span class="badge @badgeClass">@inv.Status</span></td>
+                        <td>@inv.Confirmations</td>
+                        <td>@inv.CreatedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>@(inv.PaidAt?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
+                        <td>
+                            <a asp-action="Checkout" asp-controller="GrinCheckout"
+                               asp-route-storeId="@storeId" asp-route-invoiceId="@inv.Id"
+                               class="btn btn-sm btn-outline-info">View</a>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}

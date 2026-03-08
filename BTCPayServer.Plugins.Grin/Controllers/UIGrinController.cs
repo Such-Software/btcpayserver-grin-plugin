@@ -29,6 +29,7 @@ public class UIGrinController : Controller
         {
             StoreId = storeId
         };
+        ViewBag.Invoices = await _grinService.GetInvoicesByStore(storeId);
         return View(settings);
     }
 

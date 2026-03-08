@@ -1,19 +1,60 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Threading.Tasks;
 using BTCPayServer.Plugins.Grin.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Plugins.Grin.Services;
 
 public class GrinService
 {
     private readonly GrinDbContextFactory _dbContextFactory;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<GrinService> _logger;
 
-    public GrinService(GrinDbContextFactory dbContextFactory)
+    // Cached GRIN/USD price
+    private decimal _cachedGrinUsd;
+    private DateTimeOffset _cacheExpiry;
+
+    public GrinService(GrinDbContextFactory dbContextFactory, IHttpClientFactory httpClientFactory,
+        ILogger<GrinService> logger)
     {
         _dbContextFactory = dbContextFactory;
+        _httpClientFactory = httpClientFactory;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// Get GRIN/USD price from Gate.io, cached for 2 minutes.
+    /// </summary>
+    public async Task<decimal> GetGrinUsdPrice()
+    {
+        if (_cachedGrinUsd > 0 && DateTimeOffset.UtcNow < _cacheExpiry)
+            return _cachedGrinUsd;
+
+        try
+        {
+            var client = _httpClientFactory.CreateClient();
+            var response = await client.GetStringAsync(
+                "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=GRIN_USDT");
+            var arr = JArray.Parse(response);
+            var last = arr[0]?["last"]?.Value<decimal>() ?? 0m;
+            if (last > 0)
+            {
+                _cachedGrinUsd = last;
+                _cacheExpiry = DateTimeOffset.UtcNow.AddMinutes(2);
+            }
+            return _cachedGrinUsd;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch GRIN/USD price from Gate.io");
+            return _cachedGrinUsd; // return stale cache if available
+        }
     }
 
     // Store settings CRUD
@@ -85,6 +126,26 @@ public class GrinService
         return await ctx.GrinInvoices
             .Where(i => i.Status != GrinInvoiceStatus.Confirmed &&
                         i.Status != GrinInvoiceStatus.Expired)
+            .ToListAsync();
+    }
+
+    public async Task<List<GrinInvoice>> GetInvoicesByStore(string storeId, int limit = 50)
+    {
+        await using var ctx = _dbContextFactory.CreateContext();
+        return await ctx.GrinInvoices
+            .Where(i => i.StoreId == storeId)
+            .OrderByDescending(i => i.CreatedAt)
+            .Take(limit)
+            .ToListAsync();
+    }
+
+    public async Task<List<GrinInvoice>> GetExpiredCandidates(TimeSpan maxAge)
+    {
+        await using var ctx = _dbContextFactory.CreateContext();
+        var cutoff = DateTimeOffset.UtcNow - maxAge;
+        return await ctx.GrinInvoices
+            .Where(i => (i.Status == GrinInvoiceStatus.Pending || i.Status == GrinInvoiceStatus.AwaitingResponse)
+                        && i.CreatedAt < cutoff)
             .ToListAsync();
     }
 

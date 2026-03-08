@@ -161,6 +161,15 @@ public class GrinRPCClient
         }));
     }
 
+    public async Task<JsonElement> CancelTx(string txSlateId)
+    {
+        return await WithAutoReconnect(() => RpcEncrypted("cancel_tx", new
+        {
+            token = _token,
+            tx_slate_id = txSlateId
+        }));
+    }
+
     /// <summary>
     /// Wraps an RPC call with auto-reconnect on session expiry.
     /// On CryptographicException (stale shared key) or session-related errors,

@@ -2,6 +2,11 @@
 @{
     Layout = null;
     var amountGrin = Model.AmountNanogrin / 1_000_000_000m;
+    var grinUsdPrice = (decimal)(ViewBag.GrinUsdPrice ?? 0m);
+    var amountUsd = grinUsdPrice > 0 ? amountGrin * grinUsdPrice : 0m;
+    var usdDisplay = amountUsd >= 0.01m ? $"~ ${amountUsd:F2} USD"
+                   : amountUsd > 0 ? "< $0.01 USD"
+                   : "";
     var statusText = Model.Status switch
     {
         BTCPayServer.Plugins.Grin.Data.GrinInvoiceStatus.Pending => "Awaiting Payment",
@@ -83,18 +88,23 @@
             color: #b0b0c0;
             margin-bottom: 0.75rem;
         }
-        .address-box {
-            background: #0d1117;
-            border: 1px solid var(--grin-border);
-            border-radius: 0.5rem;
-            padding: 0.75rem;
-            font-family: 'Courier New', monospace;
-            font-size: 0.8rem;
-            word-break: break-all;
-            position: relative;
-            cursor: pointer;
+        .qr-container {
+            text-align: center;
+            margin-bottom: 1rem;
         }
-        .address-box:hover { border-color: var(--grin-yellow); }
+        .qr-container canvas {
+            border-radius: 0.5rem;
+            background: #fff;
+            padding: 8px;
+        }
+        .qr-toggle {
+            font-size: 0.75rem;
+            color: var(--grin-yellow);
+            cursor: pointer;
+            margin-top: 0.5rem;
+            display: inline-block;
+        }
+        .qr-toggle:hover { text-decoration: underline; }
         .slatepack-box {
             background: #0d1117;
             border: 1px solid var(--grin-border);
@@ -113,21 +123,6 @@
             color: #666;
             text-align: right;
             margin-top: 0.25rem;
-        }
-        .divider {
-            text-align: center;
-            margin: 1.25rem 0;
-            color: #555;
-            font-size: 0.8rem;
-        }
-        .divider::before, .divider::after {
-            content: '';
-            display: inline-block;
-            width: 30%;
-            height: 1px;
-            background: var(--grin-border);
-            vertical-align: middle;
-            margin: 0 0.5rem;
         }
         textarea {
             width: 100%;
@@ -180,8 +175,13 @@
 <body>
     <div class="checkout-container">
         <div class="checkout-header">
+            <img src="/Resources/img/grin-logo.png" alt="Grin" style="width:48px;height:48px;margin-bottom:0.5rem;" />
             <h1>Pay with Grin</h1>
             <div class="checkout-amount">@amountGrin <span>GRIN</span></div>
+            @if (!string.IsNullOrEmpty(usdDisplay))
+            {
+                <div style="font-size: 0.9rem; color: #b0b0c0;">@usdDisplay</div>
+            }
             @if (Model.Status == BTCPayServer.Plugins.Grin.Data.GrinInvoiceStatus.Broadcast)
             {
                 <div class="status-badge status-broadcast">@statusText</div>
@@ -201,34 +201,20 @@
         {
             <div class="card">
                 <h2>Payment Received</h2>
-                <p>Your transaction has been broadcast to the network. Waiting for @(10) confirmations (~10 minutes).</p>
+                <p>Your transaction has been broadcast to the network. Waiting for @ViewBag.MinConfirmations confirmations.</p>
                 <p>Confirmations: <strong>@Model.Confirmations</strong></p>
             </div>
         }
         else
         {
-            <!-- Option 1: Tor / Slatepack Address -->
             <div class="card">
-                <h2>Option 1: Send via Wallet</h2>
-                <p>Send exactly <strong>@amountGrin GRIN</strong> to this slatepack address using your Grin wallet.
-                   If your wallet supports Tor, the transaction completes automatically.</p>
-                @if (!string.IsNullOrEmpty(Model.SlatepackAddress))
-                {
-                    <div class="address-box" onclick="copyToClipboard(this)" title="Click to copy">
-                        @Model.SlatepackAddress
-                    </div>
-                    <div class="copy-hint">Click to copy</div>
-                }
-            </div>
-
-            <div class="divider">OR</div>
-
-            <!-- Option 2: Manual Slatepack -->
-            <div class="card">
-                <h2>Option 2: Manual Slatepack Exchange</h2>
-                <p>1. Copy the invoice slatepack below and process it in your wallet.</p>
+                <h2>Slatepack Exchange</h2>
+                <p>1. Scan the QR code or copy the invoice slatepack below and process it in your Grin wallet.</p>
                 @if (!string.IsNullOrEmpty(Model.IssuedSlatepack))
                 {
+                    <div class="qr-container">
+                        <div id="qr-code"></div>
+                    </div>
                     <div class="slatepack-box" onclick="copyToClipboard(this)" title="Click to copy">
                         @Model.IssuedSlatepack
                     </div>
@@ -249,7 +235,27 @@
         </div>
     </div>
 
+    <script src="~/js/qrcode.js" asp-append-version="true"></script>
     <script>
+        // Generate QR code for slatepack
+        (function() {
+            var el = document.getElementById('qr-code');
+            if (!el) return;
+            var slatepack = document.querySelector('.slatepack-box');
+            if (!slatepack) return;
+            try {
+                new QRCode(el, {
+                    text: slatepack.innerText.trim(),
+                    width: 200,
+                    height: 200,
+                    useSVG: true,
+                    correctLevel: QRCode.CorrectLevel.L
+                });
+            } catch(e) {
+                el.style.display = 'none';
+            }
+        })();
+
         function copyToClipboard(el) {
             navigator.clipboard.writeText(el.innerText.trim()).then(() => {
                 const hint = el.nextElementSibling;
