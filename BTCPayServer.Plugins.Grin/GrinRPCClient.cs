@@ -44,7 +44,10 @@ public class GrinRPCClient
 
         // 2. Send our pubkey, get server's pubkey back
         var resp = await RpcRaw("init_secure_api", new { ecdh_pubkey = pubKeyHex });
-        var serverPubKeyHex = resp.GetProperty("Ok").GetString();
+
+        if (!resp.TryGetProperty("Ok", out var okEcdh))
+            throw new Exception($"ECDH init failed: {resp}");
+        var serverPubKeyHex = okEcdh.GetString();
 
         // 3. ECDH: compute shared secret using NBitcoin
         var serverPubKey = new PubKey(serverPubKeyHex);
@@ -56,7 +59,10 @@ public class GrinRPCClient
         // 4. Open wallet to get session token
         var tokenResp = await RpcEncrypted("open_wallet",
             new { name = (string)null, password = _walletPassword });
-        _token = tokenResp.GetProperty("Ok").GetString();
+
+        if (!tokenResp.TryGetProperty("Ok", out var okToken))
+            throw new Exception($"open_wallet failed: {tokenResp}");
+        _token = okToken.GetString();
 
         _logger.LogInformation("Grin wallet session opened");
     }
@@ -175,9 +181,18 @@ public class GrinRPCClient
         var encResp = await RpcRaw("encrypted_request_v3",
             new { nonce = nonceHex, body_enc = bodyEnc });
 
-        // Decrypt response
-        var respNonceHex = encResp.GetProperty("nonce").GetString();
-        var respBodyEnc = encResp.GetProperty("body_enc").GetString();
+        // Decrypt response — unwrap "Ok" envelope if present
+        var encData = encResp;
+        if (encResp.TryGetProperty("Ok", out var okEnvelope))
+            encData = okEnvelope;
+
+        if (!encData.TryGetProperty("nonce", out var nonceEl) ||
+            !encData.TryGetProperty("body_enc", out var bodyEncEl))
+        {
+            throw new Exception($"Encrypted response missing nonce/body_enc: {encResp}");
+        }
+        var respNonceHex = nonceEl.GetString();
+        var respBodyEnc = bodyEncEl.GetString();
 
         var respNonce = Convert.FromHexString(respNonceHex);
         var respCombined = Convert.FromBase64String(respBodyEnc);
@@ -193,7 +208,11 @@ public class GrinRPCClient
         {
             throw new Exception($"Grin RPC error: {error}");
         }
-        return respJson.GetProperty("result");
+        if (!respJson.TryGetProperty("result", out var encResult))
+        {
+            throw new Exception($"Grin RPC: unexpected response: {respJson}");
+        }
+        return encResult;
     }
 
     private async Task<JsonElement> RpcRaw(string method, object paramObj)
@@ -226,6 +245,11 @@ public class GrinRPCClient
             throw new Exception($"Grin RPC error: {error}");
         }
 
-        return responseJson.GetProperty("result");
+        if (!responseJson.TryGetProperty("result", out var result))
+        {
+            throw new Exception($"Grin RPC: unexpected response: {responseJson}");
+        }
+
+        return result;
     }
 }

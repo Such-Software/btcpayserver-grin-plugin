@@ -5,7 +5,6 @@ using BTCPayServer.Plugins.Grin.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Npgsql;
 
 namespace BTCPayServer.Plugins.Grin;
 
@@ -22,21 +21,19 @@ public class PluginMigrationRunner : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        _logger.LogInformation("Grin plugin: running database migrations");
         await using var ctx = _dbContextFactory.CreateContext();
         try
         {
             await ctx.Database.MigrateAsync(cancellationToken);
+            _logger.LogInformation("Grin plugin: database migrations complete");
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            _logger.LogInformation("No migrations found, creating schema from model");
-            await ctx.Database.EnsureCreatedAsync(cancellationToken);
+            _logger.LogError(ex, "Grin plugin: failed to run database migrations");
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        return Task.CompletedTask;
-    }
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 

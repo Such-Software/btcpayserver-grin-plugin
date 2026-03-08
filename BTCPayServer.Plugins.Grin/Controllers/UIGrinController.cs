@@ -57,8 +57,19 @@ public class UIGrinController : Controller
             _rpcProvider.InvalidateClient(storeId);
             var client = await _rpcProvider.GetClient(settings);
             var height = await client.NodeHeight();
-            var heightValue = height.GetProperty("Ok").GetProperty("height").GetUInt64();
-            TempData[WellKnownTempData.SuccessMessage] = $"Connected to grin-wallet. Node height: {heightValue}";
+            // Response is {"Ok": {"header_hash": "...", "height": 123, ...}}
+            if (height.TryGetProperty("Ok", out var ok))
+            {
+                var heightEl = ok.GetProperty("height");
+                var heightValue = heightEl.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? ulong.Parse(heightEl.GetString())
+                    : heightEl.GetUInt64();
+                TempData[WellKnownTempData.SuccessMessage] = $"Connected to grin-wallet. Node height: {heightValue}";
+            }
+            else
+            {
+                TempData[WellKnownTempData.ErrorMessage] = $"Unexpected response: {height}";
+            }
         }
         catch (Exception ex)
         {
