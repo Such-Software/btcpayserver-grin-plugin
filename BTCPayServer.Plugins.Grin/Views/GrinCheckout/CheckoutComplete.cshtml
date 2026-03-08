@@ -1,0 +1,58 @@
+@model BTCPayServer.Plugins.Grin.Data.GrinInvoice
+@{
+    Layout = null;
+    var amountGrin = Model.AmountNanogrin / 1_000_000_000m;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Payment Complete</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+        .container {
+            max-width: 420px;
+            width: 100%;
+            text-align: center;
+        }
+        .checkmark {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: rgba(0, 182, 52, 0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1.5rem;
+            font-size: 2.5rem;
+        }
+        h1 { color: #00b634; margin-bottom: 0.5rem; font-size: 1.5rem; }
+        .amount { font-size: 1.5rem; font-weight: bold; color: #fff; margin: 1rem 0; }
+        .amount span { font-size: 0.9rem; color: #b0b0c0; }
+        .detail { font-size: 0.85rem; color: #888; margin-top: 0.5rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="checkmark">&#10003;</div>
+        <h1>Payment Confirmed</h1>
+        <div class="amount">@amountGrin <span>GRIN</span></div>
+        <div class="detail">Confirmed with @Model.Confirmations confirmations</div>
+        @if (Model.PaidAt.HasValue)
+        {
+            <div class="detail">Paid at @Model.PaidAt.Value.ToString("yyyy-MM-dd HH:mm UTC")</div>
+        }
+    </div>
+</body>
+</html>

@@ -1,0 +1,279 @@
+@model BTCPayServer.Plugins.Grin.Data.GrinInvoice
+@{
+    Layout = null;
+    var amountGrin = Model.AmountNanogrin / 1_000_000_000m;
+    var statusText = Model.Status switch
+    {
+        BTCPayServer.Plugins.Grin.Data.GrinInvoiceStatus.Pending => "Awaiting Payment",
+        BTCPayServer.Plugins.Grin.Data.GrinInvoiceStatus.AwaitingResponse => "Awaiting Response",
+        BTCPayServer.Plugins.Grin.Data.GrinInvoiceStatus.Broadcast => "Payment Broadcast — Awaiting Confirmations",
+        _ => Model.Status.ToString()
+    };
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pay with Grin</title>
+    <style>
+        :root {
+            --grin-yellow: #FFC107;
+            --grin-dark: #1a1a2e;
+            --grin-text: #e0e0e0;
+            --grin-card: #16213e;
+            --grin-border: #2a2a4a;
+            --grin-success: #00b634;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--grin-dark);
+            color: var(--grin-text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+        .checkout-container {
+            max-width: 520px;
+            width: 100%;
+        }
+        .checkout-header {
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .checkout-header h1 {
+            font-size: 1.5rem;
+            color: var(--grin-yellow);
+            margin-bottom: 0.25rem;
+        }
+        .checkout-amount {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #fff;
+        }
+        .checkout-amount span { font-size: 1rem; color: var(--grin-text); }
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-top: 0.5rem;
+        }
+        .status-pending { background: rgba(255, 193, 7, 0.2); color: var(--grin-yellow); }
+        .status-broadcast { background: rgba(0, 182, 52, 0.2); color: var(--grin-success); }
+        .card {
+            background: var(--grin-card);
+            border: 1px solid var(--grin-border);
+            border-radius: 0.75rem;
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        .card h2 {
+            font-size: 1rem;
+            margin-bottom: 0.75rem;
+            color: var(--grin-yellow);
+        }
+        .card p {
+            font-size: 0.85rem;
+            line-height: 1.5;
+            color: #b0b0c0;
+            margin-bottom: 0.75rem;
+        }
+        .address-box {
+            background: #0d1117;
+            border: 1px solid var(--grin-border);
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+            word-break: break-all;
+            position: relative;
+            cursor: pointer;
+        }
+        .address-box:hover { border-color: var(--grin-yellow); }
+        .slatepack-box {
+            background: #0d1117;
+            border: 1px solid var(--grin-border);
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.7rem;
+            word-break: break-all;
+            max-height: 120px;
+            overflow-y: auto;
+            cursor: pointer;
+        }
+        .slatepack-box:hover { border-color: var(--grin-yellow); }
+        .copy-hint {
+            font-size: 0.7rem;
+            color: #666;
+            text-align: right;
+            margin-top: 0.25rem;
+        }
+        .divider {
+            text-align: center;
+            margin: 1.25rem 0;
+            color: #555;
+            font-size: 0.8rem;
+        }
+        .divider::before, .divider::after {
+            content: '';
+            display: inline-block;
+            width: 30%;
+            height: 1px;
+            background: var(--grin-border);
+            vertical-align: middle;
+            margin: 0 0.5rem;
+        }
+        textarea {
+            width: 100%;
+            background: #0d1117;
+            border: 1px solid var(--grin-border);
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            color: var(--grin-text);
+            font-family: 'Courier New', monospace;
+            font-size: 0.75rem;
+            resize: vertical;
+            min-height: 80px;
+        }
+        textarea:focus { outline: none; border-color: var(--grin-yellow); }
+        .btn {
+            display: inline-block;
+            padding: 0.6rem 1.5rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.85; }
+        .btn-primary {
+            background: var(--grin-yellow);
+            color: var(--grin-dark);
+            width: 100%;
+            margin-top: 0.75rem;
+        }
+        .error-banner {
+            background: rgba(251, 56, 61, 0.15);
+            border: 1px solid rgba(251, 56, 61, 0.3);
+            color: #ff6b6b;
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+            font-size: 0.85rem;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 1rem;
+            font-size: 0.7rem;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="checkout-container">
+        <div class="checkout-header">
+            <h1>Pay with Grin</h1>
+            <div class="checkout-amount">@amountGrin <span>GRIN</span></div>
+            @if (Model.Status == BTCPayServer.Plugins.Grin.Data.GrinInvoiceStatus.Broadcast)
+            {
+                <div class="status-badge status-broadcast">@statusText</div>
+            }
+            else
+            {
+                <div class="status-badge status-pending">@statusText</div>
+            }
+        </div>
+
+        @if (TempData["Error"] is string error)
+        {
+            <div class="error-banner">@error</div>
+        }
+
+        @if (Model.Status == BTCPayServer.Plugins.Grin.Data.GrinInvoiceStatus.Broadcast)
+        {
+            <div class="card">
+                <h2>Payment Received</h2>
+                <p>Your transaction has been broadcast to the network. Waiting for @(10) confirmations (~10 minutes).</p>
+                <p>Confirmations: <strong>@Model.Confirmations</strong></p>
+            </div>
+        }
+        else
+        {
+            <!-- Option 1: Tor / Slatepack Address -->
+            <div class="card">
+                <h2>Option 1: Send via Wallet</h2>
+                <p>Send exactly <strong>@amountGrin GRIN</strong> to this slatepack address using your Grin wallet.
+                   If your wallet supports Tor, the transaction completes automatically.</p>
+                @if (!string.IsNullOrEmpty(Model.SlatepackAddress))
+                {
+                    <div class="address-box" onclick="copyToClipboard(this)" title="Click to copy">
+                        @Model.SlatepackAddress
+                    </div>
+                    <div class="copy-hint">Click to copy</div>
+                }
+            </div>
+
+            <div class="divider">OR</div>
+
+            <!-- Option 2: Manual Slatepack -->
+            <div class="card">
+                <h2>Option 2: Manual Slatepack Exchange</h2>
+                <p>1. Copy the invoice slatepack below and process it in your wallet.</p>
+                @if (!string.IsNullOrEmpty(Model.IssuedSlatepack))
+                {
+                    <div class="slatepack-box" onclick="copyToClipboard(this)" title="Click to copy">
+                        @Model.IssuedSlatepack
+                    </div>
+                    <div class="copy-hint">Click to copy</div>
+                }
+
+                <p style="margin-top: 1rem;">2. Paste your wallet's response slatepack below:</p>
+                <form method="post" asp-action="SubmitSlatepack" asp-controller="GrinCheckout"
+                      asp-route-storeId="@Model.StoreId" asp-route-invoiceId="@Model.Id">
+                    <textarea name="responseSlatepack" placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
+                    <button type="submit" class="btn btn-primary">Submit Payment</button>
+                </form>
+            </div>
+        }
+
+        <div class="footer">
+            Powered by BTCPay Server &bull; Grin Plugin
+        </div>
+    </div>
+
+    <script>
+        function copyToClipboard(el) {
+            navigator.clipboard.writeText(el.innerText.trim()).then(() => {
+                const hint = el.nextElementSibling;
+                if (hint) {
+                    hint.textContent = 'Copied!';
+                    setTimeout(() => hint.textContent = 'Click to copy', 2000);
+                }
+            });
+        }
+
+        // Poll for status updates
+        (function poll() {
+            const statusUrl = window.location.pathname + '/status';
+            setInterval(async () => {
+                try {
+                    const resp = await fetch(statusUrl);
+                    if (!resp.ok) return;
+                    const data = await resp.json();
+                    if (data.status === 'Broadcast' || data.status === 'Confirmed') {
+                        window.location.reload();
+                    }
+                } catch (e) { /* ignore */ }
+            }, 5000);
+        })();
+    </script>
+</body>
+</html>

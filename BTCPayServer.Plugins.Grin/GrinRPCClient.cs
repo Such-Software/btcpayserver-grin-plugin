@@ -121,12 +121,13 @@ public class GrinRPCClient
         }));
     }
 
-    public async Task<JsonElement> PostTx(JsonElement slate, bool fluff = false)
+    public async Task<JsonElement> PostTx(JsonElement finalizedSlate, bool fluff = false)
     {
+        // post_tx takes the finalized slate; wallet extracts the transaction internally
         return await WithAutoReconnect(() => RpcEncrypted("post_tx", new
         {
             token = _token,
-            slate,
+            slate = finalizedSlate,
             fluff
         }));
     }

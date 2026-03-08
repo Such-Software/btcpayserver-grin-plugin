@@ -54,7 +54,6 @@ public class UIGrinController : Controller
 
         try
         {
-            _rpcProvider.InvalidateClient(storeId);
             var client = await _rpcProvider.GetClient(settings);
             var height = await client.NodeHeight();
             // Response is {"Ok": {"header_hash": "...", "height": 123, ...}}
