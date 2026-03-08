@@ -16,6 +16,43 @@ public class GrinService
         _dbContextFactory = dbContextFactory;
     }
 
+    // Store settings CRUD
+
+    public async Task<GrinStoreSettings> GetStoreSettings(string storeId)
+    {
+        await using var ctx = _dbContextFactory.CreateContext();
+        return await ctx.GrinStoreSettings.FindAsync(storeId);
+    }
+
+    public async Task SaveStoreSettings(GrinStoreSettings settings)
+    {
+        await using var ctx = _dbContextFactory.CreateContext();
+        var existing = await ctx.GrinStoreSettings.FindAsync(settings.StoreId);
+        if (existing == null)
+        {
+            await ctx.GrinStoreSettings.AddAsync(settings);
+        }
+        else
+        {
+            existing.OwnerApiUrl = settings.OwnerApiUrl;
+            existing.WalletPassword = settings.WalletPassword;
+            existing.ApiSecret = settings.ApiSecret;
+            existing.MinConfirmations = settings.MinConfirmations;
+            existing.Enabled = settings.Enabled;
+        }
+        await ctx.SaveChangesAsync();
+    }
+
+    public async Task<List<GrinStoreSettings>> GetAllEnabledStores()
+    {
+        await using var ctx = _dbContextFactory.CreateContext();
+        return await ctx.GrinStoreSettings
+            .Where(s => s.Enabled)
+            .ToListAsync();
+    }
+
+    // Invoice CRUD
+
     public async Task<GrinInvoice> CreateInvoice(string invoiceId, string storeId,
         long amountNanogrin, string slatepackAddress, string issuedSlatepack, string txSlateId)
     {

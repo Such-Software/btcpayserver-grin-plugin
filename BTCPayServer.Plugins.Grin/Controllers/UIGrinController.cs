@@ -1,38 +1,70 @@
+using System;
 using System.Threading.Tasks;
 using BTCPayServer.Abstractions.Constants;
-using BTCPayServer.Abstractions.Contracts;
 using BTCPayServer.Client;
+using BTCPayServer.Plugins.Grin.Data;
 using BTCPayServer.Plugins.Grin.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace BTCPayServer.Plugins.Grin;
 
-[Route("~/plugins/grin")]
-[Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie, Policy = Policies.CanViewProfile)]
+[Route("stores/{storeId}/plugins/grin")]
+[Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie, Policy = Policies.CanModifyStoreSettings)]
 public class UIGrinController : Controller
 {
     private readonly GrinService _grinService;
-    private readonly ISettingsRepository _settingsRepository;
+    private readonly GrinRPCProvider _rpcProvider;
 
-    public UIGrinController(GrinService grinService, ISettingsRepository settingsRepository)
+    public UIGrinController(GrinService grinService, GrinRPCProvider rpcProvider)
     {
         _grinService = grinService;
-        _settingsRepository = settingsRepository;
+        _rpcProvider = rpcProvider;
     }
 
-    [HttpGet("settings")]
-    public async Task<IActionResult> Settings()
+    [HttpGet]
+    public async Task<IActionResult> Settings(string storeId)
     {
-        var settings = await _settingsRepository.GetSettingAsync<GrinSettings>() ?? new GrinSettings();
+        var settings = await _grinService.GetStoreSettings(storeId) ?? new GrinStoreSettings
+        {
+            StoreId = storeId
+        };
         return View(settings);
     }
 
-    [HttpPost("settings")]
-    public async Task<IActionResult> Settings(GrinSettings settings)
+    [HttpPost]
+    public async Task<IActionResult> Settings(string storeId, GrinStoreSettings settings)
     {
-        await _settingsRepository.UpdateSetting(settings);
+        settings.StoreId = storeId;
+        _rpcProvider.InvalidateClient(storeId);
+        await _grinService.SaveStoreSettings(settings);
         TempData[WellKnownTempData.SuccessMessage] = "Grin settings updated.";
-        return RedirectToAction(nameof(Settings));
+        return RedirectToAction(nameof(Settings), new { storeId });
+    }
+
+    [HttpPost("test")]
+    public async Task<IActionResult> TestConnection(string storeId)
+    {
+        var settings = await _grinService.GetStoreSettings(storeId);
+        if (settings == null)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = "Please save settings first.";
+            return RedirectToAction(nameof(Settings), new { storeId });
+        }
+
+        try
+        {
+            _rpcProvider.InvalidateClient(storeId);
+            var client = await _rpcProvider.GetClient(settings);
+            var height = await client.NodeHeight();
+            var heightValue = height.GetProperty("Ok").GetProperty("height").GetUInt64();
+            TempData[WellKnownTempData.SuccessMessage] = $"Connected to grin-wallet. Node height: {heightValue}";
+        }
+        catch (Exception ex)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = $"Connection failed: {ex.Message}";
+        }
+
+        return RedirectToAction(nameof(Settings), new { storeId });
     }
 }

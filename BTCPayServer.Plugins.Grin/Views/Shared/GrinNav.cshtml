@@ -1,9 +1,16 @@
+@using BTCPayServer
+@using BTCPayServer.Client
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.Grin.Views
-@using Microsoft.AspNetCore.Mvc.TagHelpers
+@model BTCPayServer.Components.MainNav.MainNavViewModel
+@{
+    var store = Context.GetStoreData();
+}
 
-<li class="nav-item">
-    <a asp-controller="UIGrin" asp-action="Settings" class="nav-link @ViewData.IsActivePage(GrinNavPages.Settings)">
-        <span>Grin</span>
-    </a>
-</li>
+@if (store != null)
+{
+    <li class="nav-item" permission="@Policies.CanModifyStoreSettings">
+        <a asp-area="" asp-controller="UIGrin" asp-action="Settings" asp-route-storeId="@store.Id" class="nav-link" id="StoreNav-Grin">
+            <span>Grin</span>
+        </a>
+    </li>
+}

@@ -14,6 +14,7 @@ public class GrinDbContext : DbContext
     }
 
     public DbSet<GrinInvoice> GrinInvoices { get; set; }
+    public DbSet<GrinStoreSettings> GrinStoreSettings { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -25,6 +26,11 @@ public class GrinDbContext : DbContext
             entity.HasIndex(e => e.TxSlateId);
             entity.HasIndex(e => e.StoreId);
             entity.HasIndex(e => e.Status);
+        });
+
+        modelBuilder.Entity<GrinStoreSettings>(entity =>
+        {
+            entity.ToTable("GrinStoreSettings");
         });
     }
 }

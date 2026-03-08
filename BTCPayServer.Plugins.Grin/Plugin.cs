@@ -15,9 +15,9 @@ public class Plugin : BaseBTCPayServerPlugin
 
     public override void Execute(IServiceCollection services)
     {
-        services.AddSingleton<IUIExtension>(new UIExtension("GrinNav", "header-nav"));
+        services.AddSingleton<IUIExtension>(new UIExtension("GrinNav", "store-integrations-nav"));
         services.AddHostedService<PluginMigrationRunner>();
-        services.AddSingleton<GrinRPCClient>();
+        services.AddSingleton<GrinRPCProvider>();
         services.AddSingleton<GrinService>();
         services.AddSingleton<GrinDbContextFactory>();
         services.AddDbContext<GrinDbContext>((provider, o) =>
