@@ -143,6 +143,17 @@ public class GrinRPCClient
         }));
     }
 
+    public async Task<JsonElement> RetrieveOutputs(int txId)
+    {
+        return await WithAutoReconnect(() => RpcEncrypted("retrieve_outputs", new
+        {
+            token = _token,
+            include_spent = false,
+            refresh_from_node = false, // already refreshed in retrieve_txs
+            tx_id = txId
+        }));
+    }
+
     public async Task<JsonElement> GetSummaryInfo()
     {
         return await WithAutoReconnect(() => RpcEncrypted("retrieve_summary_info", new

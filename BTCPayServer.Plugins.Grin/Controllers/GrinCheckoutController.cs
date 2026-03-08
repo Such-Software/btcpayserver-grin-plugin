@@ -137,6 +137,17 @@ public class GrinCheckoutController : Controller
         if (invoice == null || invoice.StoreId != storeId)
             return NotFound();
 
+        if (invoice.Status == GrinInvoiceStatus.Broadcast || invoice.Status == GrinInvoiceStatus.Confirmed)
+        {
+            return RedirectToAction(nameof(Checkout), new { storeId, invoiceId });
+        }
+
+        if (invoice.Status == GrinInvoiceStatus.Expired)
+        {
+            TempData["Error"] = "This invoice has expired. Please create a new one.";
+            return RedirectToAction(nameof(Checkout), new { storeId, invoiceId });
+        }
+
         if (string.IsNullOrWhiteSpace(responseSlatepack))
         {
             TempData["Error"] = "Please paste the response slatepack from your wallet.";
@@ -158,7 +169,8 @@ public class GrinCheckoutController : Controller
                 var decodeResult = await client.DecodeSlatepack(responseSlatepack.Trim());
                 if (!decodeResult.TryGetProperty("Ok", out decodedSlate))
                 {
-                    TempData["Error"] = $"Invalid slatepack: {decodeResult}";
+                    _logger.LogWarning("DecodeSlatepack returned error: {Response}", decodeResult);
+                    TempData["Error"] = "Invalid slatepack. Please check that you pasted the complete response from your wallet.";
                     return RedirectToAction(nameof(Checkout), new { storeId, invoiceId });
                 }
                 _logger.LogInformation("Step 1 (decode) OK. Slate type: {Type}, raw: {Raw}",
@@ -166,7 +178,8 @@ public class GrinCheckoutController : Controller
             }
             catch (Exception ex)
             {
-                TempData["Error"] = $"Decode failed: {ex.Message}";
+                _logger.LogWarning(ex, "DecodeSlatepack exception");
+                TempData["Error"] = "Failed to decode slatepack. Please check the format and try again.";
                 return RedirectToAction(nameof(Checkout), new { storeId, invoiceId });
             }
 
@@ -177,7 +190,8 @@ public class GrinCheckoutController : Controller
                 var finalizeResult = await client.FinalizeTx(decodedSlate);
                 if (!finalizeResult.TryGetProperty("Ok", out finalizedSlate))
                 {
-                    TempData["Error"] = $"Finalize failed: {finalizeResult}";
+                    _logger.LogWarning("FinalizeTx returned error: {Response}", finalizeResult);
+                    TempData["Error"] = "Could not finalize the transaction. The slatepack may be for a different invoice or already used.";
                     return RedirectToAction(nameof(Checkout), new { storeId, invoiceId });
                 }
                 _logger.LogInformation("Step 2 (finalize) OK. Slate type: {Type}, raw: {Raw}",
@@ -185,7 +199,8 @@ public class GrinCheckoutController : Controller
             }
             catch (Exception ex)
             {
-                TempData["Error"] = $"Finalize failed: {ex.Message}";
+                _logger.LogWarning(ex, "FinalizeTx exception");
+                TempData["Error"] = "Failed to finalize the transaction. Please try again.";
                 return RedirectToAction(nameof(Checkout), new { storeId, invoiceId });
             }
 
@@ -195,14 +210,16 @@ public class GrinCheckoutController : Controller
                 var postResult = await client.PostTx(finalizedSlate, fluff: true);
                 if (!postResult.TryGetProperty("Ok", out _))
                 {
-                    TempData["Error"] = $"Broadcast failed: {postResult}";
+                    _logger.LogWarning("PostTx returned error: {Response}", postResult);
+                    TempData["Error"] = "Failed to broadcast the transaction. Please try again or contact the merchant.";
                     return RedirectToAction(nameof(Checkout), new { storeId, invoiceId });
                 }
                 _logger.LogInformation("Step 3 (broadcast) OK");
             }
             catch (Exception ex)
             {
-                TempData["Error"] = $"Broadcast failed: {ex.Message}";
+                _logger.LogWarning(ex, "PostTx exception");
+                TempData["Error"] = "Failed to broadcast the transaction. Please try again.";
                 return RedirectToAction(nameof(Checkout), new { storeId, invoiceId });
             }
 
@@ -214,7 +231,7 @@ public class GrinCheckoutController : Controller
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to process slatepack for invoice {InvoiceId}", invoiceId);
-            TempData["Error"] = $"Unexpected error: {ex.GetType().Name}: {ex.Message}";
+            TempData["Error"] = "An unexpected error occurred. Please try again or contact the merchant.";
             return RedirectToAction(nameof(Checkout), new { storeId, invoiceId });
         }
     }
@@ -255,28 +272,12 @@ public class GrinCheckoutController : Controller
                         {
                             foreach (var tx in txList.EnumerateArray())
                             {
-                                var confirmed = tx.TryGetProperty("confirmed", out var c) && c.GetBoolean();
-                                var confirmations = 0;
+                                var isConfirmed = tx.TryGetProperty("confirmed", out var c) && c.GetBoolean();
+                                if (!isConfirmed)
+                                    continue;
 
-                                if (tx.TryGetProperty("kernel_lookup_min_height", out var minHeight) &&
-                                    minHeight.ValueKind != JsonValueKind.Null)
-                                {
-                                    // Get current node height to calculate confirmations
-                                    var heightResult = await client.NodeHeight();
-                                    if (heightResult.TryGetProperty("Ok", out var heightOk))
-                                    {
-                                        var currentHeight = heightOk.TryGetProperty("height", out var h)
-                                            ? (h.ValueKind == JsonValueKind.String
-                                                ? (int)ulong.Parse(h.GetString())
-                                                : (int)h.GetUInt64())
-                                            : 0;
-                                        var txHeight = minHeight.ValueKind == JsonValueKind.String
-                                            ? (int)ulong.Parse(minHeight.GetString())
-                                            : (int)minHeight.GetUInt64();
-                                        if (currentHeight > 0 && txHeight > 0)
-                                            confirmations = currentHeight - txHeight + 1;
-                                    }
-                                }
+                                // Get confirmations from output height (TxLogEntry doesn't have mined height)
+                                var confirmations = await GetConfirmationsFromOutputs(client, tx);
 
                                 if (confirmations >= settings.MinConfirmations)
                                 {
@@ -310,6 +311,73 @@ public class GrinCheckoutController : Controller
             confirmations = invoice.Confirmations,
             paidAt = invoice.PaidAt
         });
+    }
+
+    /// <summary>
+    /// Get actual confirmation count by looking up the output's mined height.
+    /// TxLogEntry only has kernel_lookup_min_height (scan start), not the actual mined height.
+    /// We use retrieve_outputs with the tx's local id to get OutputData.height.
+    /// </summary>
+    private async Task<int> GetConfirmationsFromOutputs(GrinRPCClient client, JsonElement tx)
+    {
+        // Get the tx's local id (not the slate id)
+        if (!tx.TryGetProperty("id", out var idProp))
+            return 1;
+        var txId = idProp.ValueKind == JsonValueKind.String
+            ? int.Parse(idProp.GetString()!)
+            : idProp.GetInt32();
+
+        // Get outputs for this tx
+        var outputResult = await client.RetrieveOutputs(txId);
+        if (!outputResult.TryGetProperty("Ok", out var okOutputs))
+            return 1;
+
+        // Result is [refreshed, [output1, output2, ...]]
+        JsonElement outputList;
+        if (okOutputs.ValueKind == JsonValueKind.Array && okOutputs.GetArrayLength() >= 2)
+            outputList = okOutputs[1];
+        else
+            outputList = okOutputs;
+
+        if (outputList.ValueKind != JsonValueKind.Array || outputList.GetArrayLength() == 0)
+            return 1;
+
+        // Get the highest output height (the block this tx was confirmed in)
+        long outputHeight = 0;
+        foreach (var output in outputList.EnumerateArray())
+        {
+            // OutputCommitMapping has { output: OutputData, commit: ... }
+            var outputData = output.TryGetProperty("output", out var od) ? od : output;
+            if (outputData.TryGetProperty("height", out var h))
+            {
+                var height = h.ValueKind == JsonValueKind.String
+                    ? long.Parse(h.GetString()!)
+                    : h.GetInt64();
+                if (height > outputHeight)
+                    outputHeight = height;
+            }
+        }
+
+        if (outputHeight <= 0)
+            return 1;
+
+        // Get current node height
+        var heightResult = await client.NodeHeight();
+        if (!heightResult.TryGetProperty("Ok", out var heightOk))
+            return 1;
+
+        long currentHeight = 0;
+        if (heightOk.TryGetProperty("height", out var ch))
+        {
+            currentHeight = ch.ValueKind == JsonValueKind.String
+                ? long.Parse(ch.GetString()!)
+                : ch.GetInt64();
+        }
+
+        if (currentHeight <= 0 || outputHeight <= 0)
+            return 1;
+
+        return (int)Math.Max(1, currentHeight - outputHeight + 1);
     }
 }
 

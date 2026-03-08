@@ -17,17 +17,17 @@ Grin is a privacy-preserving cryptocurrency using MimbleWimble. Unlike Bitcoin, 
 Customer                    BTCPay (this plugin)              grin-wallet
    |                              |                               |
    |  --- create invoice -------> |  --- issue_invoice_tx ------> |
-   |  <-- slatepack S1 --------- |  <-- slatepack S1 ----------- |
+   |  <-- slatepack S1 ---------  |  <-- slatepack S1 ----------- |
    |                              |                               |
    |  (process S1 in wallet)      |                               |
    |                              |                               |
    |  --- paste response S2 ----> |  --- finalize_tx (S2) ------> |
-   |                              |  --- post_tx ----------------> |
+   |                              |  --- post_tx ---------------> |
    |  <-- "payment broadcast" --- |                               |
    |                              |                               |
-   |                          [monitor service polls every 30s]   |
-   |                              |  --- retrieve_txs -----------> |
-   |                              |  --- node_height ------------> |
+   |                            [monitor service polls every 30s] |
+   |                              |  --- retrieve_txs ----------> |
+   |                              |  --- node_height -----------> |
    |  <-- "confirmed" ----------- |  (confirmations >= threshold) |
 ```
 
@@ -159,12 +159,26 @@ BTCPayServer.Plugins.Grin/
 
 Each BTCPay store connects to its own `grin-wallet` instance, similar to how Lightning works — the plugin doesn't hold keys, the merchant runs their own wallet.
 
+## Trust Model
+
+Like Lightning in BTCPay, this plugin requires the merchant to run their own `grin-wallet`. The wallet password and API secret are stored in the BTCPay database. This means:
+
+- **Self-hosted BTCPay**: Fully self-custodial. You control both the server and the wallet.
+- **Third-party BTCPay**: The server operator has access to your wallet credentials. This is the same trust model as Lightning — if you don't run the server, you're trusting the operator.
+
+Grin's interactive transaction model requires private keys for receiving, so there's no equivalent to Bitcoin's xpub-based watch-only wallets. True non-custodial operation requires self-hosting.
+
 ## Security Notes
 
 - Wallet credentials (password, API secret) are stored in the plugin's PostgreSQL tables, not in files
 - The Owner API connection uses v3 encrypted JSON-RPC (ECDH + AES-256-GCM) — even over plaintext HTTP, the RPC payload is encrypted
 - The plugin never holds private keys; all signing happens in `grin-wallet`
 - Invoice slatepack exchange happens over HTTPS (or whatever your BTCPay instance uses)
+- Error messages shown to customers are generic — internal RPC errors are logged server-side only
+
+## Running grin-wallet as a Service
+
+See [contrib/systemd/](contrib/systemd/) for example systemd unit files for running the Grin node and wallet as background services.
 
 ## License
 

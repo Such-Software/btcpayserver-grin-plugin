@@ -1,0 +1,20 @@
+[Unit]
+Description=Grin Wallet Owner API
+After=network-online.target grin-node.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=grin
+Group=grin
+ExecStart=/usr/local/bin/grin-wallet owner_api
+WorkingDirectory=/home/grin
+Restart=on-failure
+RestartSec=10
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

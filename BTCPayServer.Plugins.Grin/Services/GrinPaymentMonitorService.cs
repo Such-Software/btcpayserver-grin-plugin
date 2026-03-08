@@ -83,23 +83,13 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
 
                 foreach (var tx in txList.EnumerateArray())
                 {
-                    if (!tx.TryGetProperty("kernel_lookup_min_height", out var minHeight) ||
-                        minHeight.ValueKind == JsonValueKind.Null)
+                    // Only count confirmations if the wallet says tx is confirmed on-chain
+                    var isConfirmed = tx.TryGetProperty("confirmed", out var conf) && conf.GetBoolean();
+                    if (!isConfirmed)
                         continue;
 
-                    var heightResult = await client.NodeHeight();
-                    if (!heightResult.TryGetProperty("Ok", out var heightOk))
-                        continue;
-
-                    var currentHeight = GetIntFromJson(heightOk, "height");
-                    var txHeight = minHeight.ValueKind == JsonValueKind.String
-                        ? int.Parse(minHeight.GetString()!)
-                        : minHeight.GetInt32();
-
-                    if (currentHeight <= 0 || txHeight <= 0)
-                        continue;
-
-                    var confirmations = currentHeight - txHeight + 1;
+                    // Get actual confirmation count from output height
+                    var confirmations = await GetConfirmationsFromOutputs(client, tx);
 
                     if (confirmations >= settings.MinConfirmations)
                     {
@@ -160,13 +150,64 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
         }
     }
 
-    private static int GetIntFromJson(JsonElement parent, string property)
+    /// <summary>
+    /// Get actual confirmation count from output height.
+    /// TxLogEntry doesn't have the mined height, but OutputData does.
+    /// </summary>
+    private static async Task<int> GetConfirmationsFromOutputs(GrinRPCClient client, JsonElement tx)
     {
-        if (!parent.TryGetProperty(property, out var val))
-            return 0;
-        return val.ValueKind == JsonValueKind.String
-            ? int.Parse(val.GetString()!)
-            : val.GetInt32();
+        if (!tx.TryGetProperty("id", out var idProp))
+            return 1;
+        var txId = idProp.ValueKind == JsonValueKind.String
+            ? int.Parse(idProp.GetString()!)
+            : idProp.GetInt32();
+
+        var outputResult = await client.RetrieveOutputs(txId);
+        if (!outputResult.TryGetProperty("Ok", out var okOutputs))
+            return 1;
+
+        JsonElement outputList;
+        if (okOutputs.ValueKind == JsonValueKind.Array && okOutputs.GetArrayLength() >= 2)
+            outputList = okOutputs[1];
+        else
+            outputList = okOutputs;
+
+        if (outputList.ValueKind != JsonValueKind.Array || outputList.GetArrayLength() == 0)
+            return 1;
+
+        long outputHeight = 0;
+        foreach (var output in outputList.EnumerateArray())
+        {
+            var outputData = output.TryGetProperty("output", out var od) ? od : output;
+            if (outputData.TryGetProperty("height", out var h))
+            {
+                var height = h.ValueKind == JsonValueKind.String
+                    ? long.Parse(h.GetString()!)
+                    : h.GetInt64();
+                if (height > outputHeight)
+                    outputHeight = height;
+            }
+        }
+
+        if (outputHeight <= 0)
+            return 1;
+
+        var heightResult = await client.NodeHeight();
+        if (!heightResult.TryGetProperty("Ok", out var heightOk))
+            return 1;
+
+        long currentHeight = 0;
+        if (heightOk.TryGetProperty("height", out var ch))
+        {
+            currentHeight = ch.ValueKind == JsonValueKind.String
+                ? long.Parse(ch.GetString()!)
+                : ch.GetInt64();
+        }
+
+        if (currentHeight <= 0 || outputHeight <= 0)
+            return 1;
+
+        return (int)Math.Max(1, currentHeight - outputHeight + 1);
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
