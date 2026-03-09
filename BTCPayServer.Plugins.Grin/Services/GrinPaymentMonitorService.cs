@@ -67,6 +67,10 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
                     continue;
 
                 var client = await _rpcProvider.GetClient(settings);
+
+                // Capture height BEFORE retrieve_txs to avoid race condition
+                long currentHeight = await GetNodeHeight(client);
+
                 var txResult = await client.RetrieveTxs(invoice.TxSlateId);
 
                 if (!txResult.TryGetProperty("Ok", out var okResult))
@@ -83,13 +87,11 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
 
                 foreach (var tx in txList.EnumerateArray())
                 {
-                    // Only count confirmations if the wallet says tx is confirmed on-chain
                     var isConfirmed = tx.TryGetProperty("confirmed", out var conf) && conf.GetBoolean();
                     if (!isConfirmed)
                         continue;
 
-                    // Get actual confirmation count from output height
-                    var confirmations = await GetConfirmationsFromOutputs(client, tx);
+                    var confirmations = await GetConfirmationsFromOutputs(client, tx, currentHeight);
 
                     if (confirmations >= settings.MinConfirmations)
                     {
@@ -150,12 +152,29 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
         }
     }
 
+    private static async Task<long> GetNodeHeight(GrinRPCClient client)
+    {
+        var heightResult = await client.NodeHeight();
+        if (!heightResult.TryGetProperty("Ok", out var heightOk))
+            return 0;
+        if (heightOk.TryGetProperty("height", out var h))
+        {
+            return h.ValueKind == JsonValueKind.String
+                ? long.Parse(h.GetString()!)
+                : h.GetInt64();
+        }
+        return 0;
+    }
+
     /// <summary>
     /// Get actual confirmation count from output height.
-    /// TxLogEntry doesn't have the mined height, but OutputData does.
+    /// currentHeight must be captured BEFORE retrieve_txs to avoid race conditions.
     /// </summary>
-    private static async Task<int> GetConfirmationsFromOutputs(GrinRPCClient client, JsonElement tx)
+    private static async Task<int> GetConfirmationsFromOutputs(GrinRPCClient client, JsonElement tx, long currentHeight)
     {
+        if (currentHeight <= 0)
+            return 0;
+
         if (!tx.TryGetProperty("id", out var idProp))
             return 1;
         var txId = idProp.ValueKind == JsonValueKind.String
@@ -189,25 +208,10 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
             }
         }
 
-        if (outputHeight <= 0)
+        if (outputHeight <= 0 || currentHeight < outputHeight)
             return 1;
 
-        var heightResult = await client.NodeHeight();
-        if (!heightResult.TryGetProperty("Ok", out var heightOk))
-            return 1;
-
-        long currentHeight = 0;
-        if (heightOk.TryGetProperty("height", out var ch))
-        {
-            currentHeight = ch.ValueKind == JsonValueKind.String
-                ? long.Parse(ch.GetString()!)
-                : ch.GetInt64();
-        }
-
-        if (currentHeight <= 0 || outputHeight <= 0)
-            return 1;
-
-        return (int)Math.Max(1, currentHeight - outputHeight + 1);
+        return (int)(currentHeight - outputHeight + 1);
     }
 
     public Task StopAsync(CancellationToken cancellationToken)

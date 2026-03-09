@@ -257,6 +257,11 @@ public class GrinCheckoutController : Controller
                 if (settings != null)
                 {
                     var client = await _rpcProvider.GetClient(settings);
+
+                    // Capture node height BEFORE retrieve_txs to avoid race condition
+                    // where a block arrives between calls, inflating our count by 1
+                    long currentHeight = await GetNodeHeight(client);
+
                     var txResult = await client.RetrieveTxs(invoice.TxSlateId);
 
                     if (txResult.TryGetProperty("Ok", out var okResult))
@@ -276,8 +281,7 @@ public class GrinCheckoutController : Controller
                                 if (!isConfirmed)
                                     continue;
 
-                                // Get confirmations from output height (TxLogEntry doesn't have mined height)
-                                var confirmations = await GetConfirmationsFromOutputs(client, tx);
+                                var confirmations = await GetConfirmationsFromOutputs(client, tx, currentHeight);
 
                                 if (confirmations >= settings.MinConfirmations)
                                 {
@@ -314,12 +318,33 @@ public class GrinCheckoutController : Controller
     }
 
     /// <summary>
+    /// Get node height from the wallet's RPC.
+    /// </summary>
+    private static async Task<long> GetNodeHeight(GrinRPCClient client)
+    {
+        var heightResult = await client.NodeHeight();
+        if (!heightResult.TryGetProperty("Ok", out var heightOk))
+            return 0;
+        if (heightOk.TryGetProperty("height", out var h))
+        {
+            return h.ValueKind == JsonValueKind.String
+                ? long.Parse(h.GetString()!)
+                : h.GetInt64();
+        }
+        return 0;
+    }
+
+    /// <summary>
     /// Get actual confirmation count by looking up the output's mined height.
     /// TxLogEntry only has kernel_lookup_min_height (scan start), not the actual mined height.
     /// We use retrieve_outputs with the tx's local id to get OutputData.height.
+    /// currentHeight must be captured BEFORE retrieve_txs to avoid race conditions.
     /// </summary>
-    private async Task<int> GetConfirmationsFromOutputs(GrinRPCClient client, JsonElement tx)
+    private static async Task<int> GetConfirmationsFromOutputs(GrinRPCClient client, JsonElement tx, long currentHeight)
     {
+        if (currentHeight <= 0)
+            return 0;
+
         // Get the tx's local id (not the slate id)
         if (!tx.TryGetProperty("id", out var idProp))
             return 1;
@@ -358,26 +383,10 @@ public class GrinCheckoutController : Controller
             }
         }
 
-        if (outputHeight <= 0)
+        if (outputHeight <= 0 || currentHeight < outputHeight)
             return 1;
 
-        // Get current node height
-        var heightResult = await client.NodeHeight();
-        if (!heightResult.TryGetProperty("Ok", out var heightOk))
-            return 1;
-
-        long currentHeight = 0;
-        if (heightOk.TryGetProperty("height", out var ch))
-        {
-            currentHeight = ch.ValueKind == JsonValueKind.String
-                ? long.Parse(ch.GetString()!)
-                : ch.GetInt64();
-        }
-
-        if (currentHeight <= 0 || outputHeight <= 0)
-            return 1;
-
-        return (int)Math.Max(1, currentHeight - outputHeight + 1);
+        return (int)(currentHeight - outputHeight + 1);
     }
 }
 
