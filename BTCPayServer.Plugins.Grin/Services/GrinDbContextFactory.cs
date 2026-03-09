@@ -1,8 +1,10 @@
+using System;
 using BTCPayServer.Abstractions.Contracts;
 using BTCPayServer.Abstractions.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.Extensions.Options;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure;
 
 namespace BTCPayServer.Plugins.Grin.Services;
 
@@ -23,10 +25,10 @@ public class GrinDbContextFactory : BaseDbContextFactory<GrinDbContext>
     {
     }
 
-    public override GrinDbContext CreateContext()
+    public override GrinDbContext CreateContext(Action<NpgsqlDbContextOptionsBuilder> npgsqlOptionsAction = null)
     {
         var builder = new DbContextOptionsBuilder<GrinDbContext>();
-        ConfigureBuilder(builder);
+        ConfigureBuilder(builder, npgsqlOptionsAction);
         return new GrinDbContext(builder.Options);
     }
 }
