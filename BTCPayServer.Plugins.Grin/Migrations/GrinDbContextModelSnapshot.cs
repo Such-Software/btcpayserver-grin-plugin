@@ -43,6 +43,7 @@ partial class GrinDbContextModelSnapshot : ModelSnapshot
             b.Property<string>("ApiSecret").HasColumnType("text");
             b.Property<bool>("Enabled").HasColumnType("boolean");
             b.Property<int>("MinConfirmations").HasColumnType("integer");
+            b.Property<string>("NodeApiUrl").HasColumnType("text");
             b.Property<string>("OwnerApiUrl").HasColumnType("text");
             b.Property<string>("WalletPassword").HasColumnType("text");
 

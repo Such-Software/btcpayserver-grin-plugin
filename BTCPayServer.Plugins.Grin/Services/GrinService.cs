@@ -78,6 +78,7 @@ public class GrinService
             existing.OwnerApiUrl = settings.OwnerApiUrl;
             existing.WalletPassword = settings.WalletPassword;
             existing.ApiSecret = settings.ApiSecret;
+            existing.NodeApiUrl = settings.NodeApiUrl;
             existing.MinConfirmations = settings.MinConfirmations;
             existing.Enabled = settings.Enabled;
         }

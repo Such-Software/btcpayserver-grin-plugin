@@ -36,6 +36,9 @@ public class GrinSyncStatus : ISyncStatus
     public string PaymentMethodId { get; set; } = "GRIN";
     public bool Available { get; set; }
     public long NodeHeight { get; set; }
+    public long NetworkHeight { get; set; }
+    public int SyncPercent { get; set; }
+    public string NodeSyncStatus { get; set; } // raw sync_status from node: "no_sync", "header_sync", "body_sync", etc.
     public string SyncState { get; set; } // "synced", "syncing", "unreachable", "not_configured"
     public string Error { get; set; }
 }

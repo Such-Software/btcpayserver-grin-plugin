@@ -9,6 +9,7 @@ public class GrinStoreSettings
     public string OwnerApiUrl { get; set; } = "http://127.0.0.1:3420";
     public string WalletPassword { get; set; } = "";
     public string ApiSecret { get; set; } = "";
+    public string NodeApiUrl { get; set; } = "";
     public int MinConfirmations { get; set; } = 10;
     public bool Enabled { get; set; }
 }

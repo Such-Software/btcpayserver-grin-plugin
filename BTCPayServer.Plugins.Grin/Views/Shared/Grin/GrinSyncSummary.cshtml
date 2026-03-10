@@ -21,10 +21,17 @@
         }
         else if (status.SyncState == "syncing")
         {
-            <li>Node is syncing...</li>
-            @if (status.NodeHeight > 0)
+            @if (status.SyncPercent > 0)
             {
-                <li>Current height: @status.NodeHeight</li>
+                <li>Node syncing: @status.SyncPercent% (Height: @status.NodeHeight)</li>
+            }
+            else
+            {
+                <li>Node is syncing...</li>
+            }
+            @if (!string.IsNullOrEmpty(status.NodeSyncStatus))
+            {
+                <li>Status: @status.NodeSyncStatus</li>
             }
         }
         else
