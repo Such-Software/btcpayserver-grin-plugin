@@ -212,12 +212,35 @@ In BTCPay plugin settings, use `http://172.18.0.1:3420` (Docker gateway) or `htt
 
 ## Step 5: Install the Plugin
 
-### Upload via BTCPay UI
+### Option A: Upload via BTCPay UI
 
-1. Build the plugin package (see [README.md](README.md#manual--development) for build instructions)
-2. Go to BTCPay Server Settings > Plugins > Upload Plugin
+1. Download the latest `.btcpay` file from [GitHub Releases](https://github.com/Such-Software/btcpayserver-grin-plugin/releases)
+2. Go to BTCPay **Server Settings > Plugins > Upload Plugin**
 3. Upload the `.btcpay` file
 4. BTCPay will restart and load the plugin
+
+### Option B: Manual install (Docker)
+
+If you have SSH access to the server, you can deploy directly to the plugin volume:
+
+```bash
+# Download and extract the release
+cd /tmp
+curl -sL https://github.com/Such-Software/btcpayserver-grin-plugin/releases/download/v1.0.3/1.0.3.0.tar.xz -o grin-plugin.tar.xz
+tar xf grin-plugin.tar.xz
+
+# Extract the .btcpay zip into the plugins volume
+PLUGIN_DIR=/var/lib/docker/volumes/generated_btcpay_pluginsdir/_data/BTCPayServer.Plugins.Grin
+mkdir -p "$PLUGIN_DIR"
+python3 -c "import zipfile; zipfile.ZipFile('/tmp/1.0.3.0/BTCPayServer.Plugins.Grin.btcpay').extractall('$PLUGIN_DIR')"
+
+# Restart BTCPay to load the plugin
+docker restart generated_btcpayserver_1
+```
+
+### Option C: Build from source
+
+See [README.md](README.md#manual--development) for build instructions using PluginPacker.
 
 ### Configure the Plugin
 
