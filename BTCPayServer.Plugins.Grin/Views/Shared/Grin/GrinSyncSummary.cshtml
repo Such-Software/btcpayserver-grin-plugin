@@ -1,0 +1,39 @@
+@inject BTCPayServer.Plugins.Grin.Services.GrinSyncService SyncService
+@{
+    var status = SyncService.GetCachedStatus();
+}
+@if (status != null)
+{
+    var statusClass = status.SyncState switch
+    {
+        "synced" => "enabled",
+        "syncing" => "pending",
+        _ => "disabled"
+    };
+    <h5 class="d-flex align-items-center fw-semibold">
+        <span class="me-2 btcpay-status btcpay-status--@statusClass"></span>
+        GRIN
+    </h5>
+    <ul>
+        @if (status.SyncState == "synced")
+        {
+            <li>The node is synchronized (Height: @status.NodeHeight)</li>
+        }
+        else if (status.SyncState == "syncing")
+        {
+            <li>Node is syncing...</li>
+            @if (status.NodeHeight > 0)
+            {
+                <li>Current height: @status.NodeHeight</li>
+            }
+        }
+        else
+        {
+            <li>Node unavailable</li>
+            @if (!string.IsNullOrEmpty(status.Error))
+            {
+                <li>@status.Error</li>
+            }
+        }
+    </ul>
+}

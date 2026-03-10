@@ -22,6 +22,9 @@ public class Plugin : BaseBTCPayServerPlugin
         services.AddHostedService<GrinPaymentMonitorService>();
         services.AddSingleton<GrinRPCProvider>();
         services.AddSingleton<GrinService>();
+        services.AddSingleton<GrinSyncService>();
+        services.AddHostedService(sp => sp.GetRequiredService<GrinSyncService>());
+        services.AddSingleton<ISyncSummaryProvider, GrinSyncSummaryProvider>();
         services.AddSingleton<GrinDbContextFactory>();
         services.AddSingleton<IRateProvider>(provider =>
             new GrinRateProvider(provider.GetRequiredService<IHttpClientFactory>()));
