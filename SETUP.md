@@ -11,21 +11,22 @@ This guide covers setting up the Grin node, wallet, and BTCPay Server plugin for
 
 ```
 BTCPay Server (plugin)
-    |
-    | v3 encrypted JSON-RPC (ECDH + AES-256-GCM)
-    |
-grin-wallet (Owner API, port 3420)
-    |
-    | JSON-RPC
-    |
-Grin Node (API port 3413, P2P port 3414)
+    |                    \
+    | v3 encrypted        \ plain JSON-RPC (optional,
+    | JSON-RPC              \ for sync status monitoring)
+    |                        \
+grin-wallet (port 3420)    Grin Node (API port 3413)
+    |                        /
+    | JSON-RPC              /
+    |                      /
+Grin Node (P2P port 3414)
     |
     | P2P
     |
 Grin Network
 ```
 
-The plugin communicates exclusively with `grin-wallet` via its Owner API. The wallet connects to a Grin node (local or remote). The plugin never talks to the node directly.
+The plugin communicates with `grin-wallet` via its Owner API for all wallet operations. Optionally, if the Node API URL is configured, the plugin also queries the Grin node's `get_status` endpoint directly for detailed sync progress (percentage, sync phase).
 
 ### How the Encrypted API Works
 
@@ -191,20 +192,44 @@ Install as a systemd service:
 [Unit]
 Description=Forward grin-wallet owner API to Docker network
 After=grin-wallet.service
+BindsTo=grin-wallet.service
+PartOf=grin-wallet.service
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/socat TCP-LISTEN:3420,fork,bind=172.18.0.1,reuseaddr TCP:127.0.0.1:3420
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-In BTCPay plugin settings, use `http://172.18.0.1:3420` as the Owner API URL.
+If running your own node and want sync status monitoring in the plugin, also proxy the node API:
 
-**Note:** The grin-wallet Owner API always binds to `127.0.0.1` — the `owner_api_listen_interface` setting in grin-wallet.toml exists in the config template but is not read by the code (`owner_api_listen_addr()` in `config/src/types.rs` hardcodes `127.0.0.1`). The socat proxy is the correct way to expose it to Docker.
+```ini
+# /etc/systemd/system/grin-node-proxy.service
+[Unit]
+Description=Forward grin node API to Docker network
+After=grin-node.service
+BindsTo=grin-node.service
+PartOf=grin-node.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:3413,fork,bind=172.18.0.1,reuseaddr TCP:127.0.0.1:3413
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+In BTCPay plugin settings:
+- **Owner API URL**: `http://172.18.0.1:3420`
+- **Node API URL** (optional): `http://172.18.0.1:3413` (enables sync percentage display)
+
+**Note:** Both the grin-wallet Owner API and the grin node API bind to `127.0.0.1` only. The `owner_api_listen_interface` setting in grin-wallet.toml exists in the config template but is not read by the code (`owner_api_listen_addr()` in `config/src/types.rs` hardcodes `127.0.0.1`). The socat proxy is the correct way to expose them to Docker.
 
 ## Step 5: Install the Plugin
 
@@ -222,13 +247,13 @@ If you have SSH access to the server, you can deploy directly to the plugin volu
 ```bash
 # Download and extract the release
 cd /tmp
-curl -sL https://github.com/Such-Software/btcpayserver-grin-plugin/releases/download/v1.0.3/1.0.3.0.tar.xz -o grin-plugin.tar.xz
+curl -sL https://github.com/Such-Software/btcpayserver-grin-plugin/releases/download/v1.0.4/1.0.4.0.tar.xz -o grin-plugin.tar.xz
 tar xf grin-plugin.tar.xz
 
 # Extract the .btcpay zip into the plugins volume
 PLUGIN_DIR=/var/lib/docker/volumes/generated_btcpay_pluginsdir/_data/BTCPayServer.Plugins.Grin
 mkdir -p "$PLUGIN_DIR"
-python3 -c "import zipfile; zipfile.ZipFile('/tmp/1.0.3.0/BTCPayServer.Plugins.Grin.btcpay').extractall('$PLUGIN_DIR')"
+python3 -c "import zipfile; zipfile.ZipFile('/tmp/1.0.4.0/BTCPayServer.Plugins.Grin.btcpay').extractall('$PLUGIN_DIR')"
 
 # Restart BTCPay to load the plugin
 docker restart generated_btcpayserver_1
@@ -243,9 +268,10 @@ See [README.md](README.md#manual--development) for build instructions using Plug
 1. In BTCPay, go to your store's settings
 2. Click **Grin** in the left sidebar
 3. Enter:
-   - **Owner API URL**: `http://127.0.0.1:3420` (or Docker gateway URL)
+   - **Owner API URL**: `http://127.0.0.1:3420` (or `http://172.18.0.1:3420` for Docker)
    - **Wallet Password**: the password you set during `grin-wallet init`
    - **API Secret**: contents of `.owner_api_secret`
+   - **Node API URL** (optional): `http://127.0.0.1:3413` (or Docker gateway URL) — enables sync percentage in the status panel
 4. Set **Minimum Confirmations** (default: 10, roughly 10 minutes)
 5. Check **Enable Grin Payments** and click **Save**
 6. Click **Test Connection** — should show the current node height

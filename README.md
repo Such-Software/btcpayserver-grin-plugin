@@ -80,9 +80,12 @@ Set your standard BTCPay environment variables (`BTCPAY_NETWORK`, `BTCPAY_POSTGR
 1. In BTCPay, go to your store's settings
 2. Click **Grin** in the left sidebar
 3. Enter your wallet's Owner API URL, password, and API secret
-4. Set minimum confirmations (default: 10, roughly 10 minutes)
-5. Check **Enable Grin Payments** and save
-6. Click **Test Connection** to verify
+4. Optionally enter your Grin node's API URL for detailed sync status monitoring (shows sync percentage and phase in the BTCPay footer panel)
+5. Set minimum confirmations (default: 10, roughly 10 minutes)
+6. Check **Enable Grin Payments** and save
+7. Click **Test Connection** to verify
+
+See [SETUP.md](SETUP.md) for detailed deployment instructions including Docker networking with socat proxies.
 
 ## Creating Invoices
 
@@ -146,13 +149,16 @@ BTCPayServer.Plugins.Grin/
 │   ├── GrinRPCProvider.cs             # Per-store RPC client cache
 │   ├── GrinRateProvider.cs            # BTCPay rate engine integration
 │   ├── GrinPaymentMonitorService.cs   # Background confirmation tracker
+│   ├── GrinSyncService.cs            # Node sync status polling (30s)
+│   ├── GrinSyncSummaryProvider.cs    # BTCPay footer panel integration
 │   └── GrinDbContextFactory.cs        # DB context factory
 ├── Views/
 │   ├── UIGrin/Settings.cshtml         # Store settings + invoice list
 │   ├── GrinCheckout/Checkout.cshtml   # Payment page
 │   ├── GrinCheckout/CheckoutComplete.cshtml
 │   ├── GrinCheckout/CheckoutExpired.cshtml
-│   └── Shared/GrinNav.cshtml          # Sidebar nav item
+│   ├── Shared/GrinNav.cshtml          # Sidebar nav item
+│   └── Shared/Grin/GrinSyncSummary.cshtml  # Footer sync panel
 ├── Migrations/                        # EF Core migrations
 └── Resources/img/                     # Grin logo
 ```
