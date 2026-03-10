@@ -204,11 +204,7 @@ WantedBy=multi-user.target
 
 In BTCPay plugin settings, use `http://172.18.0.1:3420` as the Owner API URL.
 
-### Option B: Bind wallet to 0.0.0.0
-
-Set `owner_api_listen_interface = "0.0.0.0"` in grin-wallet.toml. The wallet will listen on all interfaces. Make sure port 3420 is not exposed to the internet (firewall it).
-
-In BTCPay plugin settings, use `http://172.18.0.1:3420` (Docker gateway) or `http://<host-ip>:3420`.
+**Note:** The grin-wallet Owner API always binds to `127.0.0.1` — the `owner_api_listen_interface` setting in grin-wallet.toml exists in the config template but is not read by the code (`owner_api_listen_addr()` in `config/src/types.rs` hardcodes `127.0.0.1`). The socat proxy is the correct way to expose it to Docker.
 
 ## Step 5: Install the Plugin
 
