@@ -41,6 +41,21 @@
         .amount { font-size: 1.5rem; font-weight: bold; color: #fff; margin: 1rem 0; }
         .amount span { font-size: 0.9rem; color: #b0b0c0; }
         .detail { font-size: 0.85rem; color: #888; margin-top: 0.5rem; }
+        .return-btn {
+            display: inline-block;
+            margin-top: 1.5rem;
+            padding: 0.75rem 2rem;
+            background: #f5c542;
+            color: #1a1a2e;
+            font-weight: 600;
+            font-size: 1rem;
+            border: none;
+            border-radius: 8px;
+            text-decoration: none;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .return-btn:hover { background: #e6b835; }
     </style>
 </head>
 <body>
@@ -53,6 +68,15 @@
         @if (Model.PaidAt.HasValue)
         {
             <div class="detail">Paid at @Model.PaidAt.Value.ToString("yyyy-MM-dd HH:mm UTC")</div>
+        }
+        @if (!string.IsNullOrEmpty(Model.RedirectUrl))
+        {
+            <a href="@Model.RedirectUrl" class="return-btn">Return to store</a>
+            <script>
+                // Auto-redirect after 5 seconds
+                setTimeout(function() { window.location.href = "@Model.RedirectUrl"; }, 5000);
+            </script>
+            <div class="detail" style="margin-top:0.5rem;">Redirecting in 5 seconds...</div>
         }
     </div>
 </body>
