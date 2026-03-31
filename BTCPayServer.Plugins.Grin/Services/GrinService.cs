@@ -169,4 +169,66 @@ public class GrinService
 
         await ctx.SaveChangesAsync();
     }
+
+    /// <summary>
+    /// Dispatch a webhook for a Grin invoice status change.
+    /// Same BTCPay-compat format as GrinPaymentMonitorService uses.
+    /// </summary>
+    public async Task DispatchWebhook(GrinStoreSettings settings, GrinInvoice invoice, string eventType)
+    {
+        if (string.IsNullOrEmpty(settings.WebhookUrl))
+            return;
+
+        try
+        {
+            var payload = new
+            {
+                @event = eventType,
+                invoiceId = invoice.Id,
+                storeId = invoice.StoreId,
+                invoice = new
+                {
+                    id = invoice.Id,
+                    status = invoice.Status.ToString(),
+                    amount = invoice.AmountNanogrin / 1_000_000_000m,
+                    confirmations = invoice.Confirmations,
+                    metadata = new
+                    {
+                        session_id = invoice.SessionId ?? "",
+                        order_id = invoice.OrderId ?? "",
+                    },
+                },
+            };
+
+            var json = System.Text.Json.JsonSerializer.Serialize(payload);
+            var body = System.Text.Encoding.UTF8.GetBytes(json);
+
+            // HMAC-SHA256 signature
+            string signature = "";
+            if (!string.IsNullOrEmpty(settings.WebhookSecret))
+            {
+                using var hmac = new System.Security.Cryptography.HMACSHA256(
+                    System.Text.Encoding.UTF8.GetBytes(settings.WebhookSecret));
+                signature = Convert.ToHexString(hmac.ComputeHash(body)).ToLowerInvariant();
+            }
+
+            var httpClient = _httpClientFactory.CreateClient();
+            var request = new HttpRequestMessage(HttpMethod.Post, settings.WebhookUrl)
+            {
+                Content = new ByteArrayContent(body)
+            };
+            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            request.Headers.Add("btcpay-sig", $"sha256={signature}");
+            request.Headers.Add("User-Agent", "btcpayserver-grin-plugin/1.0");
+
+            var response = await httpClient.SendAsync(request);
+            _logger.LogInformation(
+                "Webhook dispatched for invoice {InvoiceId}: {EventType} → {StatusCode}",
+                invoice.Id, eventType, (int)response.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to dispatch webhook for invoice {InvoiceId}", invoice.Id);
+        }
+    }
 }

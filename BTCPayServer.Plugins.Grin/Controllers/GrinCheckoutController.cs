@@ -252,6 +252,21 @@ public class GrinCheckoutController : Controller
             await _grinService.UpdateInvoiceStatus(invoiceId, GrinInvoiceStatus.Broadcast);
             _logger.LogInformation("Grin invoice {InvoiceId} finalized and broadcast", invoiceId);
 
+            // Dispatch webhook: payment detected (broadcast to network)
+            // This triggers "authorized" in Medusa, creating the order immediately.
+            try
+            {
+                var updatedInvoice = await _grinService.GetInvoice(invoiceId);
+                if (updatedInvoice != null)
+                {
+                    _grinService.DispatchWebhook(settings, updatedInvoice, "InvoiceProcessing");
+                }
+            }
+            catch (Exception webhookEx)
+            {
+                _logger.LogWarning(webhookEx, "Failed to dispatch broadcast webhook for invoice {InvoiceId}", invoiceId);
+            }
+
             return RedirectToAction(nameof(Checkout), new { storeId, invoiceId });
         }
         catch (Exception ex)
