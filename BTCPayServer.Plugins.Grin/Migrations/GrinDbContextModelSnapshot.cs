@@ -23,7 +23,10 @@ partial class GrinDbContextModelSnapshot : ModelSnapshot
             b.Property<int>("Confirmations").HasColumnType("integer");
             b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone");
             b.Property<string>("IssuedSlatepack").HasColumnType("text");
+            b.Property<string>("OrderId").HasColumnType("text");
             b.Property<DateTimeOffset?>("PaidAt").HasColumnType("timestamp with time zone");
+            b.Property<string>("RedirectUrl").HasColumnType("text");
+            b.Property<string>("SessionId").HasColumnType("text");
             b.Property<string>("SlatepackAddress").HasColumnType("text");
             b.Property<int>("Status").HasColumnType("integer");
             b.Property<string>("StoreId").HasColumnType("text");
@@ -46,6 +49,8 @@ partial class GrinDbContextModelSnapshot : ModelSnapshot
             b.Property<string>("NodeApiUrl").HasColumnType("text");
             b.Property<string>("OwnerApiUrl").HasColumnType("text");
             b.Property<string>("WalletPassword").HasColumnType("text");
+            b.Property<string>("WebhookSecret").HasColumnType("text");
+            b.Property<string>("WebhookUrl").HasColumnType("text");
 
             b.HasKey("StoreId");
 

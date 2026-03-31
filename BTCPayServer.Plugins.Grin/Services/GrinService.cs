@@ -81,6 +81,8 @@ public class GrinService
             existing.NodeApiUrl = settings.NodeApiUrl;
             existing.MinConfirmations = settings.MinConfirmations;
             existing.Enabled = settings.Enabled;
+            existing.WebhookUrl = settings.WebhookUrl;
+            existing.WebhookSecret = settings.WebhookSecret;
         }
         await ctx.SaveChangesAsync();
     }
@@ -96,7 +98,8 @@ public class GrinService
     // Invoice CRUD
 
     public async Task<GrinInvoice> CreateInvoice(string invoiceId, string storeId,
-        long amountNanogrin, string slatepackAddress, string issuedSlatepack, string txSlateId)
+        long amountNanogrin, string slatepackAddress, string issuedSlatepack, string txSlateId,
+        string sessionId = null, string orderId = null, string redirectUrl = null)
     {
         await using var ctx = _dbContextFactory.CreateContext();
         var invoice = new GrinInvoice
@@ -107,6 +110,9 @@ public class GrinService
             SlatepackAddress = slatepackAddress,
             IssuedSlatepack = issuedSlatepack,
             TxSlateId = txSlateId,
+            SessionId = sessionId,
+            OrderId = orderId,
+            RedirectUrl = redirectUrl,
             Status = GrinInvoiceStatus.Pending,
             CreatedAt = DateTimeOffset.UtcNow
         };

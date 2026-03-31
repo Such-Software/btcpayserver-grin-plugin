@@ -17,6 +17,9 @@ public class GrinInvoice
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? PaidAt { get; set; }
     public int Confirmations { get; set; }
+    public string SessionId { get; set; }       // Medusa payment session ID
+    public string OrderId { get; set; }          // Medusa cart/order reference
+    public string RedirectUrl { get; set; }      // Post-payment redirect URL
 }
 
 public enum GrinInvoiceStatus

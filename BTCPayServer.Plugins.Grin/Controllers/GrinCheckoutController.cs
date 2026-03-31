@@ -1,8 +1,11 @@
 using System;
+using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using BTCPayServer.Plugins.Grin.Data;
 using BTCPayServer.Plugins.Grin.Services;
+using BTCPayServer.Rating;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
@@ -13,13 +16,15 @@ public class GrinCheckoutController : Controller
 {
     private readonly GrinService _grinService;
     private readonly GrinRPCProvider _rpcProvider;
+    private readonly GrinRateProvider _rateProvider;
     private readonly ILogger<GrinCheckoutController> _logger;
 
     public GrinCheckoutController(GrinService grinService, GrinRPCProvider rpcProvider,
-        ILogger<GrinCheckoutController> logger)
+        GrinRateProvider rateProvider, ILogger<GrinCheckoutController> logger)
     {
         _grinService = grinService;
         _rpcProvider = rpcProvider;
+        _rateProvider = rateProvider;
         _logger = logger;
     }
 
@@ -42,8 +47,28 @@ public class GrinCheckoutController : Controller
         {
             var client = await _rpcProvider.GetClient(settings);
 
+            // Convert fiat to GRIN if a non-GRIN currency is specified.
+            // The GrinRateProvider fetches GRIN/USDT from Gate.io.
+            var grinAmount = request.Amount;
+            if (!string.IsNullOrEmpty(request.Currency)
+                && !request.Currency.Equals("GRIN", StringComparison.OrdinalIgnoreCase))
+            {
+                var rates = await _rateProvider.GetRatesAsync(CancellationToken.None);
+                var pair = rates.FirstOrDefault(r =>
+                    r.CurrencyPair.Right.Equals(request.Currency, StringComparison.OrdinalIgnoreCase));
+                if (pair == null || pair.BidAsk.Ask <= 0)
+                    return BadRequest(new { error = $"No GRIN/{request.Currency} rate available." });
+
+                // Amount is in fiat, divide by GRIN price to get GRIN amount.
+                // Round up to nearest whole GRIN to avoid undercharging.
+                grinAmount = Math.Ceiling(request.Amount / pair.BidAsk.Ask);
+                _logger.LogInformation(
+                    "Converted {FiatAmount} {Currency} → {GrinAmount} GRIN at rate {Rate}",
+                    request.Amount, request.Currency, grinAmount, pair.BidAsk.Ask);
+            }
+
             // Convert GRIN to nanogrin (1 GRIN = 1,000,000,000 nanogrin)
-            var amountNanogrin = (long)(request.Amount * 1_000_000_000m);
+            var amountNanogrin = (long)(grinAmount * 1_000_000_000m);
 
             // Issue invoice via grin-wallet
             var invoiceResult = await client.IssueInvoiceTx(amountNanogrin,
@@ -76,10 +101,11 @@ public class GrinCheckoutController : Controller
             // Save to database
             var grinInvoice = await _grinService.CreateInvoice(
                 invoiceId, storeId, amountNanogrin,
-                slatepackAddress, slatepackMessage, txSlateId);
+                slatepackAddress, slatepackMessage, txSlateId,
+                request.SessionId, request.OrderId, request.RedirectUrl);
 
             _logger.LogInformation("Grin invoice {InvoiceId} created: {Amount} GRIN, tx_slate_id={TxSlateId}",
-                invoiceId, request.Amount, txSlateId);
+                invoiceId, grinAmount, txSlateId);
 
             var checkoutUrl = Url.Action(nameof(Checkout), "GrinCheckout",
                 new { storeId, invoiceId }, Request.Scheme);
@@ -88,7 +114,7 @@ public class GrinCheckoutController : Controller
             {
                 invoiceId,
                 checkoutUrl,
-                amount = request.Amount,
+                amount = grinAmount,
                 amountNanogrin,
                 txSlateId,
                 slatepackAddress,
@@ -395,4 +421,6 @@ public class CreateGrinInvoiceRequest
     public decimal Amount { get; set; }
     public string OrderId { get; set; }
     public string RedirectUrl { get; set; }
+    public string SessionId { get; set; }
+    public string Currency { get; set; }
 }

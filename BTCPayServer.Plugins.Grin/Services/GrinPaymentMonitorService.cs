@@ -1,4 +1,7 @@
 using System;
+using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,6 +15,7 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
 {
     private readonly GrinService _grinService;
     private readonly GrinRPCProvider _rpcProvider;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<GrinPaymentMonitorService> _logger;
     private Timer _timer;
 
@@ -21,10 +25,11 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
 
     public GrinPaymentMonitorService(GrinService grinService, GrinRPCProvider rpcProvider,
-        ILogger<GrinPaymentMonitorService> logger)
+        IHttpClientFactory httpClientFactory, ILogger<GrinPaymentMonitorService> logger)
     {
         _grinService = grinService;
         _rpcProvider = rpcProvider;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
@@ -100,6 +105,9 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
                         _logger.LogInformation(
                             "Invoice {InvoiceId} confirmed with {Confirmations} confirmations",
                             invoice.Id, confirmations);
+
+                        // Dispatch webhook to Medusa so order gets created
+                        await DispatchWebhookAsync(invoice, settings, "InvoicePaymentSettled");
                     }
                     else if (confirmations > invoice.Confirmations)
                     {
@@ -127,8 +135,12 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
                 _logger.LogInformation("Expired stale invoice {InvoiceId} (created {CreatedAt})",
                     invoice.Id, invoice.CreatedAt);
 
-                // Cancel the tx in the wallet so funds aren't locked
+                // Dispatch expiry webhook
                 var settings = await _grinService.GetStoreSettings(invoice.StoreId);
+                if (settings != null)
+                    await DispatchWebhookAsync(invoice, settings, "InvoiceExpired");
+
+                // Cancel the tx in the wallet so funds aren't locked
                 if (settings != null && !string.IsNullOrEmpty(invoice.TxSlateId))
                 {
                     try
@@ -149,6 +161,60 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
             {
                 _logger.LogWarning(ex, "Failed to expire invoice {InvoiceId}", invoice.Id);
             }
+        }
+    }
+
+    /// <summary>
+    /// Send webhook to Medusa backend so payment status is updated and order is created.
+    /// Uses the same BTCPay-compat event format that our crypto checkout providers expect.
+    /// </summary>
+    private async Task DispatchWebhookAsync(GrinInvoice invoice, GrinStoreSettings settings, string eventType)
+    {
+        if (string.IsNullOrEmpty(settings.WebhookUrl))
+            return;
+
+        try
+        {
+            var amountGrin = invoice.AmountNanogrin / 1_000_000_000m;
+            var payload = new
+            {
+                @event = eventType,
+                invoice = new
+                {
+                    id = invoice.Id,
+                    status = invoice.Status.ToString(),
+                    amount = amountGrin,
+                    metadata = new
+                    {
+                        session_id = invoice.SessionId ?? "",
+                        medusa_cart_id = invoice.OrderId ?? "",
+                    }
+                }
+            };
+
+            var json = JsonSerializer.Serialize(payload);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            // HMAC-SHA256 signature (same format as xmrcheckout/wowcheckout)
+            if (!string.IsNullOrEmpty(settings.WebhookSecret))
+            {
+                using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(settings.WebhookSecret));
+                var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(json));
+                var sig = "sha256=" + BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+                content.Headers.Add("btcpay-sig", sig);
+            }
+
+            var client = _httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(15);
+            var response = await client.PostAsync(settings.WebhookUrl, content);
+
+            _logger.LogInformation(
+                "Webhook dispatched for invoice {InvoiceId}: {EventType} → {Url} (status {StatusCode})",
+                invoice.Id, eventType, settings.WebhookUrl, (int)response.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to dispatch webhook for invoice {InvoiceId}", invoice.Id);
         }
     }
 

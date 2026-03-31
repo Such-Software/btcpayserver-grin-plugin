@@ -12,4 +12,6 @@ public class GrinStoreSettings
     public string NodeApiUrl { get; set; } = "";
     public int MinConfirmations { get; set; } = 10;
     public bool Enabled { get; set; }
+    public string WebhookUrl { get; set; } = "";
+    public string WebhookSecret { get; set; } = "";
 }

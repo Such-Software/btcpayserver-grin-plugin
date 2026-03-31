@@ -79,6 +79,19 @@
                 <input asp-for="MinConfirmations" class="form-control" type="number" min="1" max="100" />
                 <span class="text-muted small">Number of confirmations before marking payment as complete (default: 10, ~10 minutes).</span>
             </div>
+            <div class="form-group mb-3">
+                <label asp-for="WebhookUrl" class="form-label">Webhook URL <span class="text-muted">(optional)</span></label>
+                <input asp-for="WebhookUrl" class="form-control" placeholder="https://api.example.com/hooks/payment/grin_grin" />
+                <span class="text-muted small">
+                    URL to receive payment notification webhooks (InvoicePaymentSettled, InvoiceExpired).
+                    Leave empty to disable webhooks.
+                </span>
+            </div>
+            <div class="form-group mb-3">
+                <label asp-for="WebhookSecret" class="form-label">Webhook Secret <span class="text-muted">(optional)</span></label>
+                <input asp-for="WebhookSecret" class="form-control" type="password" value="@Model.WebhookSecret" />
+                <span class="text-muted small">HMAC-SHA256 secret for signing webhook payloads (sent in <code>btcpay-sig</code> header).</span>
+            </div>
             <div class="form-check mb-4">
                 <input asp-for="Enabled" class="form-check-input" type="checkbox" />
                 <label asp-for="Enabled" class="form-check-label">Enable Grin Payments</label>
