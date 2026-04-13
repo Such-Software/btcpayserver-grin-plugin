@@ -145,6 +145,15 @@ public class GrinCheckoutController : Controller
         if (invoice.Status == GrinInvoiceStatus.Expired)
             return View("CheckoutExpired", invoice);
 
+        // Auto-redirect on Broadcast (payment detected, awaiting confirmations)
+        // when redirectUrl is set. The order is already created in Medusa via
+        // the InvoiceProcessing webhook dispatched in SubmitSlatepack.
+        if (invoice.Status == GrinInvoiceStatus.Broadcast
+            && !string.IsNullOrEmpty(invoice.RedirectUrl))
+        {
+            return Redirect(invoice.RedirectUrl);
+        }
+
         var settings = await _grinService.GetStoreSettings(storeId);
         ViewBag.MinConfirmations = settings?.MinConfirmations ?? 10;
         ViewBag.GrinUsdPrice = await _grinService.GetGrinUsdPrice();
