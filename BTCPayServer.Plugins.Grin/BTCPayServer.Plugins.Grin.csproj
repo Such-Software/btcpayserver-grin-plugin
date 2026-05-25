@@ -1,13 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk.Razor">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <!-- Track BTCPayServer's target framework. Bumped to net10.0
+         alongside BTCPayServer v2.3.9 (which itself dropped net8.0
+         support sometime between 2.3.5 and 2.3.9). -->
+    <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
 
   <!-- Plugin specific properties -->
   <PropertyGroup>
     <Product>Grin Payments</Product>
     <Description>Accept Grin (MimbleWimble) payments via Slatepack.</Description>
-    <Version>1.0.9</Version>
+    <Version>1.0.10</Version>
   </PropertyGroup>
 
   <!-- Plugin development properties -->
@@ -28,13 +31,18 @@
 
 
   <ItemGroup Condition="$(Configuration) != 'Release'">
-    <PackageReference Include="Microsoft.CodeAnalysis.Common" Version="4.10.0" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.10.0" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11">
+    <!-- Versions track BTCPayServer's own dependencies (v2.3.9, net10).
+         CodeAnalysis pinned to 5.3.0 because BTCPayServer.Rating
+         transitively requires it; Npgsql/EFCore to 10.0.x to match
+         BTCPayServer.Abstractions. Bumping any of these requires a
+         matching BTCPay submodule bump. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.Common" Version="5.3.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
   </ItemGroup>
 
   <!-- If you reference another project, by default, the dlls won't be copied in the published plugin, you need <Private>true</Private> -->
