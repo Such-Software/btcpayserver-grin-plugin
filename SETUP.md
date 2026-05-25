@@ -242,18 +242,20 @@ In BTCPay plugin settings:
 
 ### Option B: Manual install (Docker)
 
-If you have SSH access to the server, you can deploy directly to the plugin volume:
+If you have SSH access to the server, you can deploy directly to the plugin volume. Substitute the latest version tag from
+[GitHub Releases](https://github.com/Such-Software/btcpayserver-grin-plugin/releases) for `<VERSION>` below:
 
 ```bash
 # Download and extract the release
 cd /tmp
-curl -sL https://github.com/Such-Software/btcpayserver-grin-plugin/releases/download/v1.0.4/1.0.4.0.tar.xz -o grin-plugin.tar.xz
+VERSION=1.0.10   # see https://github.com/Such-Software/btcpayserver-grin-plugin/releases for the current tag
+curl -sL https://github.com/Such-Software/btcpayserver-grin-plugin/releases/download/v${VERSION}/${VERSION}.0.tar.xz -o grin-plugin.tar.xz
 tar xf grin-plugin.tar.xz
 
 # Extract the .btcpay zip into the plugins volume
 PLUGIN_DIR=/var/lib/docker/volumes/generated_btcpay_pluginsdir/_data/BTCPayServer.Plugins.Grin
 mkdir -p "$PLUGIN_DIR"
-python3 -c "import zipfile; zipfile.ZipFile('/tmp/1.0.4.0/BTCPayServer.Plugins.Grin.btcpay').extractall('$PLUGIN_DIR')"
+python3 -c "import zipfile; zipfile.ZipFile('/tmp/${VERSION}.0/BTCPayServer.Plugins.Grin.btcpay').extractall('$PLUGIN_DIR')"
 
 # Restart BTCPay to load the plugin
 docker restart generated_btcpayserver_1
@@ -275,6 +277,36 @@ See [README.md](README.md#manual--development) for build instructions using Plug
 4. Set **Minimum Confirmations** (default: 10, roughly 10 minutes)
 5. Check **Enable Grin Payments** and click **Save**
 6. Click **Test Connection** — should show the current node height
+7. Reload the page — the **Wallet Balance** card appears under the
+   sync-status banner, showing spendable / awaiting confirmation /
+   locked / total GRIN at a glance.
+
+### Accept your first payment (end-to-end smoke test)
+
+The fastest way to confirm everything works:
+
+1. Create an invoice via the plugin's REST API:
+
+   ```bash
+   curl -X POST "http://localhost:23000/stores/{storeId}/plugins/grin/invoices" \
+     -H "Content-Type: application/json" \
+     -d '{"amount": 0.01, "orderId": "smoke-test"}'
+   ```
+
+   The response includes a `checkoutUrl` — open it in a browser.
+
+2. Copy the issued slatepack from the checkout page into your
+   personal Grin wallet (e.g. `grin-wallet receive --file -`),
+   produce the response slatepack, and paste it back into the
+   checkout page.
+
+3. The page should flip to "payment broadcast" within a few seconds,
+   and the invoice on the settings page should transition
+   `Broadcast` → `Confirmed` once your store's `MinConfirmations`
+   threshold is reached (default 10, ~10 minutes).
+
+If anything stalls, the troubleshooting section below covers the
+common gotchas.
 
 ## Troubleshooting
 
@@ -321,9 +353,23 @@ The wallet will work once `sync_status` shows `"no_sync"`.
 
 ## Security Considerations
 
-- **Wallet credentials** (password, API secret) are stored in BTCPay's PostgreSQL database
-- **The Owner API uses encrypted RPC** — even over HTTP, payloads are AES-256-GCM encrypted
-- **The plugin never holds private keys** — all signing happens in grin-wallet
-- **Bind the Owner API to localhost** (`127.0.0.1`) and use socat for Docker access
-- **Don't expose port 3420 to the internet** — the API has full wallet control
-- **Self-hosted BTCPay = self-custodial**. Third-party BTCPay = you're trusting the operator with wallet credentials (same trust model as Lightning in BTCPay)
+- **Wallet credentials** (password, API secret, webhook secret) are
+  stored in BTCPay's PostgreSQL database, **encrypted at rest** via
+  ASP.NET Core's `IDataProtector` (v1.0.10+). The decryption key
+  lives in BTCPay's DataProtection key ring — back up that directory
+  alongside your Postgres dumps. See [SECURITY.md](SECURITY.md) for
+  full details + key-ring durability notes.
+- **The Owner API uses encrypted RPC** — even over HTTP, payloads are
+  AES-256-GCM encrypted (ECDH key exchange + AES-256-GCM)
+- **The plugin never holds private keys** — all signing happens in
+  grin-wallet
+- **Bind the Owner API to localhost** (`127.0.0.1`) and use socat for
+  Docker access
+- **Don't expose port 3420 to the internet** — the API has full
+  wallet control
+- **Self-hosted BTCPay = self-custodial**. Third-party BTCPay = you're
+  trusting the operator with wallet credentials (same trust model as
+  Lightning in BTCPay)
+
+For the full security policy + responsible disclosure process, see
+[SECURITY.md](SECURITY.md).

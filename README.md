@@ -33,7 +33,7 @@ Customer                    BTCPay (this plugin)              grin-wallet
 
 ## Requirements
 
-- BTCPay Server v1.12+ (.NET 8)
+- BTCPay Server v2.3.9+ (.NET 10)
 - PostgreSQL (used by BTCPay)
 - A running `grin-wallet` instance with the Owner API enabled
 - A synced Grin node (the wallet connects to it)
@@ -65,11 +65,14 @@ git clone https://github.com/Such-Software/btcpayserver-grin-plugin.git
 cd btcpayserver-grin-plugin
 git submodule update --init --recursive
 
-# Build the plugin
+# Build the plugin (.NET 10 SDK required)
 dotnet build BTCPayServer.Plugins.Grin/BTCPayServer.Plugins.Grin.csproj
 
+# Run the tests
+dotnet test BTCPayServer.Plugins.Grin.Tests/BTCPayServer.Plugins.Grin.Tests.csproj
+
 # Run BTCPay with the plugin loaded
-export BTCPAY_DEBUG_PLUGINS="$(pwd)/BTCPayServer.Plugins.Grin/bin/Debug/net8.0/BTCPayServer.Plugins.Grin.dll"
+export BTCPAY_DEBUG_PLUGINS="$(pwd)/BTCPayServer.Plugins.Grin/bin/Debug/net10.0/BTCPayServer.Plugins.Grin.dll"
 dotnet run --project btcpayserver/BTCPayServer --no-launch-profile
 ```
 
@@ -176,15 +179,62 @@ Grin's interactive transaction model requires private keys for receiving, so the
 
 ## Security Notes
 
-- Wallet credentials (password, API secret) are stored in the plugin's PostgreSQL tables, not in files
-- The Owner API connection uses v3 encrypted JSON-RPC (ECDH + AES-256-GCM) — even over plaintext HTTP, the RPC payload is encrypted
+- Wallet credentials (password, API secret, webhook secret) are
+  stored in the plugin's PostgreSQL tables, **encrypted at rest** via
+  ASP.NET Core's `IDataProtector` (v1.0.10+). Key ring lives in
+  BTCPay's existing DataProtection directory — back it up.
+- The Owner API connection uses v3 encrypted JSON-RPC (ECDH +
+  AES-256-GCM) — even over plaintext HTTP, the RPC payload is encrypted
 - The plugin never holds private keys; all signing happens in `grin-wallet`
 - Invoice slatepack exchange happens over HTTPS (or whatever your BTCPay instance uses)
 - Error messages shown to customers are generic — internal RPC errors are logged server-side only
+- Chain-reorg detection (v1.0.10+) re-checks confirmed invoices for
+  up to 2 hours after settlement and fires an `InvoiceInvalid`
+  webhook if the payment is later orphaned
+
+For the full security policy + responsible disclosure process, see
+[SECURITY.md](SECURITY.md).
+
+## Limitations & Known Issues
+
+This release is labelled "ready for community testing" — production-
+ready for early adopters, with a short list of known gaps:
+
+- **QR code on checkout is hard to scan** with mobile cameras. The
+  slatepack payload is 500–1500 chars, producing a Version 30+ QR
+  with ~1px modules at default zoom. Workaround: customers paste the
+  slatepack manually. Fix (animated multi-frame QR via UR / BBQr) is
+  on the roadmap for the next release.
+- **Webhook delivery has no retry queue.** If your consumer is
+  unreachable for 30s+ around a confirmation event, the notification
+  is logged-and-dropped. Acceptable for low-volume stores monitoring
+  their logs; high-volume operators should wait for the retry
+  feature.
+- **Integration tests** run against pure helpers (reorg decision,
+  HMAC signature, encrypted columns). A real grin-wallet integration
+  test isn't in CI yet — manual end-to-end is documented in
+  `SETUP.md` under "Accept your first payment."
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release history and a
+detailed view of what shipped when.
 
 ## Running grin-wallet as a Service
 
 See [contrib/systemd/](contrib/systemd/) for example systemd unit files for running the Grin node and wallet as background services.
+
+## Contributing
+
+PRs welcome. Bugs, feature requests, and design discussion go in
+GitHub issues. Security issues go via email — see
+[SECURITY.md](SECURITY.md). The full contribution guide lives in
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+Quick PR checklist:
+
+- `dotnet build` clean
+- `dotnet test` green (all 23+ tests)
+- `CHANGELOG.md` updated under the current version
+- One logical change per PR
 
 ## License
 
