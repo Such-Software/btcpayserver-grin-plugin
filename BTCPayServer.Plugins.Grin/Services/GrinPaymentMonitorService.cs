@@ -23,6 +23,11 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
     private static readonly TimeSpan InvoiceExpiry = TimeSpan.FromHours(24);
     // How often to run the monitor loop
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
+    // How long after a confirmation we keep checking for reorgs.
+    // Grin reorgs deeper than ~10 blocks (10 minutes) are practically
+    // unheard of; 2 hours is paranoia + margin. Past this window an
+    // invoice is considered final and the monitor stops re-checking.
+    private static readonly TimeSpan ReorgMonitoringWindow = TimeSpan.FromHours(2);
 
     public GrinPaymentMonitorService(GrinService grinService, GrinRPCProvider rpcProvider,
         IHttpClientFactory httpClientFactory, ILogger<GrinPaymentMonitorService> logger)
@@ -45,11 +50,91 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
         try
         {
             await CheckBroadcastInvoices();
+            await CheckForReorgs();
             await ExpireStaleInvoices();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Grin payment monitor error");
+        }
+    }
+
+    /// <summary>
+    /// Re-check recently-confirmed invoices to detect chain reorgs.
+    /// If a previously-confirmed tx is no longer confirmed in the
+    /// wallet, OR its confirmation count has dropped below the
+    /// store's threshold, downgrade the invoice back to Broadcast and
+    /// fire an InvoiceInvalid webhook so the merchant doesn't ship
+    /// against a no-longer-settled payment.
+    ///
+    /// We only re-check invoices that confirmed within
+    /// <see cref="ReorgMonitoringWindow"/> ago. Grin reorgs deeper
+    /// than ~10 blocks (10 minutes at current hashpower) are
+    /// effectively impossible, so an invoice that confirmed two hours
+    /// ago is considered final.
+    /// </summary>
+    private async Task CheckForReorgs()
+    {
+        var confirmed = await _grinService.GetReorgMonitoringCandidates(ReorgMonitoringWindow);
+
+        foreach (var invoice in confirmed)
+        {
+            if (string.IsNullOrEmpty(invoice.TxSlateId)) continue;
+
+            try
+            {
+                var settings = await _grinService.GetStoreSettings(invoice.StoreId);
+                if (settings == null || !settings.Enabled) continue;
+
+                var client = await _rpcProvider.GetClient(settings);
+
+                long currentHeight = await GetNodeHeight(client);
+                var txResult = await client.RetrieveTxs(invoice.TxSlateId);
+                if (!txResult.TryGetProperty("Ok", out var okResult)) continue;
+
+                JsonElement txList = (okResult.ValueKind == JsonValueKind.Array && okResult.GetArrayLength() >= 2)
+                    ? okResult[1] : okResult;
+                if (txList.ValueKind != JsonValueKind.Array) continue;
+
+                foreach (var tx in txList.EnumerateArray())
+                {
+                    var stillConfirmed = tx.TryGetProperty("confirmed", out var conf) && conf.GetBoolean();
+                    var confirmations = stillConfirmed
+                        ? await GetConfirmationsFromOutputs(client, tx, currentHeight)
+                        : 0;
+
+                    // Reorg signal: wallet no longer marks the tx
+                    // confirmed, OR confirmation count is now below
+                    // the store's threshold. Both produce the same
+                    // action — invoice is no longer paid.
+                    var reorged = !stillConfirmed || confirmations < settings.MinConfirmations;
+                    if (!reorged) continue;
+
+                    _logger.LogWarning(
+                        "Invoice {InvoiceId} appears to have been reorged: " +
+                        "confirmed={Confirmed}, confirmations={Confirmations} (was {WasConfirmations})",
+                        invoice.Id, stillConfirmed, confirmations, invoice.Confirmations);
+
+                    // Downgrade so the regular Broadcast-status
+                    // check picks it up next cycle and continues
+                    // tracking confirmations. If the tx is back in
+                    // the mempool / new chain, it'll re-confirm and
+                    // re-fire InvoicePaymentSettled.
+                    await _grinService.UpdateInvoiceStatus(
+                        invoice.Id, GrinInvoiceStatus.Broadcast, confirmations);
+
+                    // Fire an InvoiceInvalid webhook so the storefront
+                    // can flip the order back to "awaiting payment"
+                    // and notify the customer. Merchants observing
+                    // the webhook should NOT ship against this
+                    // invoice until it re-settles.
+                    await DispatchWebhookAsync(invoice, settings, "InvoiceInvalid");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to reorg-check invoice {InvoiceId}", invoice.Id);
+            }
         }
     }
 

@@ -156,6 +156,29 @@ public class GrinService
             .ToListAsync();
     }
 
+    /// <summary>
+    /// Recently-confirmed invoices that the monitor should keep
+    /// double-checking for reorgs. Grin reorgs deeper than ~10 blocks
+    /// are essentially unheard of (network has 30s+ block time and
+    /// solid hashpower), but the window is configurable so operators
+    /// can extend it if they ship high-value items.
+    ///
+    /// The cutoff is by <c>PaidAt</c> (when the transition to
+    /// Confirmed happened), not <c>CreatedAt</c>, so an invoice
+    /// confirmed today still gets monitored regardless of when the
+    /// customer first opened the checkout page.
+    /// </summary>
+    public async Task<List<GrinInvoice>> GetReorgMonitoringCandidates(TimeSpan window)
+    {
+        await using var ctx = _dbContextFactory.CreateContext();
+        var cutoff = DateTimeOffset.UtcNow - window;
+        return await ctx.GrinInvoices
+            .Where(i => i.Status == GrinInvoiceStatus.Confirmed
+                        && i.PaidAt != null
+                        && i.PaidAt > cutoff)
+            .ToListAsync();
+    }
+
     public async Task UpdateInvoiceStatus(string invoiceId, GrinInvoiceStatus status, int confirmations = 0)
     {
         await using var ctx = _dbContextFactory.CreateContext();
