@@ -226,14 +226,13 @@ public class GrinService
             var json = System.Text.Json.JsonSerializer.Serialize(payload);
             var body = System.Text.Encoding.UTF8.GetBytes(json);
 
-            // HMAC-SHA256 signature
-            string signature = "";
-            if (!string.IsNullOrEmpty(settings.WebhookSecret))
-            {
-                using var hmac = new System.Security.Cryptography.HMACSHA256(
-                    System.Text.Encoding.UTF8.GetBytes(settings.WebhookSecret));
-                signature = Convert.ToHexString(hmac.ComputeHash(body)).ToLowerInvariant();
-            }
+            // HMAC-SHA256 signature — shared helper keeps this path and
+            // GrinPaymentMonitorService.DispatchWebhookAsync in lockstep.
+            // Helper returns "" when no secret configured; in that case
+            // we skip the header entirely rather than emit a bogus
+            // "sha256=" with no value (which Medusa would reject as
+            // malformed).
+            var sig = WebhookSignature.Compute(settings.WebhookSecret, body);
 
             var httpClient = _httpClientFactory.CreateClient();
             var request = new HttpRequestMessage(HttpMethod.Post, settings.WebhookUrl)
@@ -241,7 +240,10 @@ public class GrinService
                 Content = new ByteArrayContent(body)
             };
             request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-            request.Headers.Add("btcpay-sig", $"sha256={signature}");
+            if (!string.IsNullOrEmpty(sig))
+            {
+                request.Headers.Add("btcpay-sig", sig);
+            }
             request.Headers.Add("User-Agent", "btcpayserver-grin-plugin/1.0");
 
             var response = await httpClient.SendAsync(request);

@@ -107,7 +107,8 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
                     // confirmed, OR confirmation count is now below
                     // the store's threshold. Both produce the same
                     // action — invoice is no longer paid.
-                    var reorged = !stillConfirmed || confirmations < settings.MinConfirmations;
+                    var reorged = ReorgDetection.IsReorged(
+                        stillConfirmed, confirmations, settings.MinConfirmations);
                     if (!reorged) continue;
 
                     _logger.LogWarning(
@@ -280,12 +281,15 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
             var json = JsonSerializer.Serialize(payload);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            // HMAC-SHA256 signature (same format as xmrcheckout/wowcheckout)
-            if (!string.IsNullOrEmpty(settings.WebhookSecret))
+            // HMAC-SHA256 signature (same format as xmrcheckout/wowcheckout).
+            // Shared helper guarantees this stays bit-for-bit identical
+            // to the GrinService.DispatchWebhook path — otherwise the
+            // two code paths drift on encoding and Medusa rejects half
+            // the deliveries. See WebhookSignatureTests.
+            var sig = WebhookSignature.Compute(
+                settings.WebhookSecret, Encoding.UTF8.GetBytes(json));
+            if (!string.IsNullOrEmpty(sig))
             {
-                using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(settings.WebhookSecret));
-                var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(json));
-                var sig = "sha256=" + BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
                 content.Headers.Add("btcpay-sig", sig);
             }
 
