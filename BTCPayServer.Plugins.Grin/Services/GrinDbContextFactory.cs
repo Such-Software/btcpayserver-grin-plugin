@@ -1,6 +1,7 @@
 using System;
 using BTCPayServer.Abstractions.Contracts;
 using BTCPayServer.Abstractions.Models;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.Extensions.Options;
@@ -14,21 +15,28 @@ public class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<GrinDbCont
     {
         var builder = new DbContextOptionsBuilder<GrinDbContext>();
         builder.UseNpgsql("User ID=postgres;Host=127.0.0.1;Port=39372;Database=designtimebtcpay");
-        return new GrinDbContext(builder.Options, true);
+        // Design-time = no DataProtector. Migrations don't need the
+        // encryption converter; they just emit raw text columns.
+        return new GrinDbContext(builder.Options, dataProtectionProvider: null, designTime: true);
     }
 }
 
 public class GrinDbContextFactory : BaseDbContextFactory<GrinDbContext>
 {
-    public GrinDbContextFactory(IOptions<DatabaseOptions> options)
+    private readonly IDataProtectionProvider _dataProtectionProvider;
+
+    public GrinDbContextFactory(
+        IOptions<DatabaseOptions> options,
+        IDataProtectionProvider dataProtectionProvider)
         : base(options, "BTCPayServer.Plugins.Grin")
     {
+        _dataProtectionProvider = dataProtectionProvider;
     }
 
     public override GrinDbContext CreateContext(Action<NpgsqlDbContextOptionsBuilder> npgsqlOptionsAction = null)
     {
         var builder = new DbContextOptionsBuilder<GrinDbContext>();
         ConfigureBuilder(builder, npgsqlOptionsAction);
-        return new GrinDbContext(builder.Options);
+        return new GrinDbContext(builder.Options, _dataProtectionProvider);
     }
 }
