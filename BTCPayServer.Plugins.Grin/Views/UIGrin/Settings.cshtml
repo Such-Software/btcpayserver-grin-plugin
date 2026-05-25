@@ -48,6 +48,71 @@
     </div>
 }
 
+@{
+    var balance = ViewBag.Balance as BTCPayServer.Plugins.Grin.UIGrinController.WalletBalanceView;
+    // Format nanogrin → GRIN with trailing zeros trimmed. 1 GRIN = 1e9
+    // nanogrin; display up to 9 decimal places, but strip trailing
+    // zeros so common round numbers ("100" GRIN) don't render as
+    // "100.000000000".
+    string FormatGrin(long nanogrin)
+    {
+        var grin = nanogrin / 1_000_000_000m;
+        var formatted = grin.ToString("0.#########");
+        return formatted == "" ? "0" : formatted;
+    }
+}
+
+@if (balance != null)
+{
+    <div class="mb-4 p-3 bg-tile rounded">
+        <h5 class="mb-3">
+            <img src="~/Resources/img/grin-logo.png" alt="" style="width:1em;height:1em;vertical-align:text-bottom;margin-right:0.25em;" />
+            Wallet Balance
+        </h5>
+        @if (!string.IsNullOrEmpty(balance.Error))
+        {
+            <div class="text-muted small">
+                Could not fetch balance: <code>@balance.Error</code>
+            </div>
+        }
+        else
+        {
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <div class="text-muted small">Spendable</div>
+                    <div class="fw-semibold" style="font-size:1.25em;">
+                        @FormatGrin(balance.SpendableNanogrin) <span class="text-muted small">GRIN</span>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Awaiting confirmation</div>
+                    <div class="fw-semibold">
+                        @FormatGrin(balance.AwaitingNanogrin) <span class="text-muted small">GRIN</span>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Locked</div>
+                    <div class="fw-semibold">
+                        @FormatGrin(balance.LockedNanogrin) <span class="text-muted small">GRIN</span>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Total</div>
+                    <div class="fw-semibold">
+                        @FormatGrin(balance.TotalNanogrin) <span class="text-muted small">GRIN</span>
+                    </div>
+                </div>
+            </div>
+            @if (balance.LastConfirmedHeight > 0)
+            {
+                <div class="text-muted small mt-2">
+                    As of block @balance.LastConfirmedHeight. Refresh the page to update.
+                </div>
+            }
+        }
+    </div>
+}
+
 <div class="row">
     <div class="col-xxl-constrain col-xl-8">
         <form method="post" asp-action="Settings" asp-controller="UIGrin" asp-route-storeId="@storeId">
