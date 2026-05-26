@@ -54,6 +54,13 @@ cause unrecoverable from logs).
   Gate.io call (was the source of the 2026-05-26 P0 incident).
 - Repeated rate-fetch failures are now visible to the operator
   before customers start seeing 400s at checkout.
+- **`POST /stores/{storeId}/plugins/grin/invoices` was silently
+  returning HTTP 400 with empty body** after BTCPay 2.3.9 — that
+  release added a global `UIControllerAntiforgeryTokenAttribute`
+  filter that rejects cookie-less POSTs before the action runs.
+  Added `[IgnoreAntiforgeryToken]` on the external API action only;
+  the form-based checkout submission still gets antiforgery
+  protection via the global filter.
 
 ## [1.0.10] — 2026-05-26
 

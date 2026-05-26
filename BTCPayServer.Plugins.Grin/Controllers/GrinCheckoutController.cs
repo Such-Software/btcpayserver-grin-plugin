@@ -36,7 +36,15 @@ public class GrinCheckoutController : Controller
     /// POST /stores/{storeId}/plugins/grin/invoices
     /// Body: { "amount": 1.5, "orderId": "order-123", "redirectUrl": "https://..." }
     /// </summary>
+    // External API endpoint — called from e-commerce integrations
+    // (Medusa, custom storefronts) without a BTCPay session/cookie.
+    // BTCPay 2.3.9 added a global UIControllerAntiforgeryTokenAttribute
+    // filter that rejects every cookie-less POST with an empty-body 400
+    // before the action runs. Selectively opt this one action out;
+    // the rest of the controller (slatepack-submit form etc.) still
+    // gets antiforgery via the global filter where it makes sense.
     [HttpPost("invoices")]
+    [Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryToken]
     public async Task<IActionResult> CreateInvoice(string storeId, [FromBody] CreateGrinInvoiceRequest request)
     {
         var settings = await _grinService.GetStoreSettings(storeId);
