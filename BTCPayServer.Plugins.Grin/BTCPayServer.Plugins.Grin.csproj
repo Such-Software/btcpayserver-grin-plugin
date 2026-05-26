@@ -10,7 +10,7 @@
   <PropertyGroup>
     <Product>Grin Payments</Product>
     <Description>Accept Grin (MimbleWimble) payments via Slatepack.</Description>
-    <Version>1.0.11</Version>
+    <Version>1.1.0</Version>
   </PropertyGroup>
 
   <!-- Plugin development properties -->

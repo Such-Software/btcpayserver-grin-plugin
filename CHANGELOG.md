@@ -5,6 +5,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/). Patch-version-only releases
 are skipped when they fix a single bug — see `git log` for the full history.
 
+## [1.1.0] — 2026-05-26
+
+First "promoted" public release. Same code as v1.0.11 — the version
+bump signals the project is past the v1.0.x soak window, has survived
+a production incident + recovery, and is ready for community use.
+
+Smoke-tested end-to-end on suchshop.lol against a live grin-wallet +
+grin-node:
+- Invoice creation (was the v1.0.11 P0 — confirmed fixed).
+- Slatepack flow → broadcast → confirmation.
+- BackgroundFetcherRateProvider serving cached rate (no live Gate.io
+  call per invoice) — `GrinRateHealth` shows green "fresh" dot.
+- Auto-redirect on broadcast (v1.0.9) still firing.
+
+No code or wire-protocol changes vs v1.0.11.
+
 ## [1.0.11] — 2026-05-26
 
 Reliability follow-up to v1.0.10. A real production incident on
