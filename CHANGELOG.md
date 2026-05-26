@@ -5,6 +5,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/). Patch-version-only releases
 are skipped when they fix a single bug — see `git log` for the full history.
 
+## [1.2.0] — 2026-05-26
+
+### Added
+
+- **Public rate endpoint** — `GET /plugins/grin/rate` returns the
+  cached GRIN/USDT spot rate (sourced from Gate.io via the existing
+  `BackgroundFetcherRateProvider`). No auth required.
+
+  Use case: downstream services (e.g. an e-commerce storefront
+  pricing products in GRIN) can display a live USD reference next
+  to the headline GRIN amount, matching what the customer would
+  actually be quoted at checkout. We can't pull this from BTCPay's
+  built-in `/api/rates` endpoint — plugin-registered rate providers
+  aren't exposed there — so a dedicated route was the cleanest path.
+
+  Response shape:
+  ```json
+  {
+    "rate": "0.50800000",
+    "currency": "USDT",
+    "base_currency": "GRIN",
+    "source": "gate.io",
+    "quoted_at": "2026-05-26T19:30:00Z",
+    "state": "fresh",
+    "consecutive_failures": 0
+  }
+  ```
+
 ## [1.1.0] — 2026-05-26
 
 First "promoted" public release. Same code as v1.0.11 — the version
