@@ -15,11 +15,16 @@ public class UIGrinController : Controller
 {
     private readonly GrinService _grinService;
     private readonly GrinRPCProvider _rpcProvider;
+    private readonly GrinRateHealth _rateHealth;
 
-    public UIGrinController(GrinService grinService, GrinRPCProvider rpcProvider)
+    public UIGrinController(
+        GrinService grinService,
+        GrinRPCProvider rpcProvider,
+        GrinRateHealth rateHealth)
     {
         _grinService = grinService;
         _rpcProvider = rpcProvider;
+        _rateHealth = rateHealth;
     }
 
     [HttpGet]
@@ -31,6 +36,7 @@ public class UIGrinController : Controller
         };
         ViewBag.Invoices = await _grinService.GetInvoicesByStore(storeId);
         ViewBag.Balance = await TryGetWalletBalance(settings);
+        ViewBag.RateHealth = _rateHealth.GetStatus();
         return View(settings);
     }
 

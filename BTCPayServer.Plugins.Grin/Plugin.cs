@@ -2,9 +2,12 @@ using BTCPayServer.Abstractions.Contracts;
 using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Abstractions.Services;
 using BTCPayServer.Plugins.Grin.Services;
+using BTCPayServer.Rating;
+using System;
 using System.Net.Http;
 using BTCPayServer.Services.Rates;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Plugins.Grin;
 
@@ -26,10 +29,40 @@ public class Plugin : BaseBTCPayServerPlugin
         services.AddHostedService(sp => sp.GetRequiredService<GrinSyncService>());
         services.AddSingleton<ISyncSummaryProvider, GrinSyncSummaryProvider>();
         services.AddSingleton<GrinDbContextFactory>();
+
+        // Rate-provider chain — three layers:
+        //   1. GrinRateProvider           — raw HTTP fetch from Gate.io,
+        //                                   no caching, structured logging
+        //   2. BackgroundFetcherRateProvider — BTCPay's built-in caching
+        //                                      wrapper. 60s refresh,
+        //                                      10min validity, stale-
+        //                                      while-revalidate.
+        //   3. GrinRateHealth             — health tracking + startup
+        //                                   warmup. This is what every
+        //                                   IRateProvider consumer
+        //                                   actually receives via DI.
+        //
+        // The cardinal sin to avoid: injecting GrinRateProvider directly
+        // anywhere. That bypasses every layer of caching + monitoring
+        // and pays a synchronous Gate.io round-trip on every call.
         services.AddSingleton<GrinRateProvider>(provider =>
-            new GrinRateProvider(provider.GetRequiredService<IHttpClientFactory>()));
+            new GrinRateProvider(
+                provider.GetRequiredService<IHttpClientFactory>(),
+                provider.GetRequiredService<ILogger<GrinRateProvider>>()));
+        services.AddSingleton<BackgroundFetcherRateProvider>(provider =>
+            new BackgroundFetcherRateProvider(provider.GetRequiredService<GrinRateProvider>())
+            {
+                RefreshRate = TimeSpan.FromSeconds(60),
+                ValidatyTime = TimeSpan.FromMinutes(10),
+            });
+        services.AddSingleton<GrinRateHealth>(provider =>
+            new GrinRateHealth(
+                provider.GetRequiredService<BackgroundFetcherRateProvider>(),
+                provider.GetRequiredService<ILogger<GrinRateHealth>>()));
+        services.AddHostedService(sp => sp.GetRequiredService<GrinRateHealth>());
         services.AddSingleton<IRateProvider>(provider =>
-            provider.GetRequiredService<GrinRateProvider>());
+            provider.GetRequiredService<GrinRateHealth>());
+
         services.AddDbContext<GrinDbContext>((provider, o) =>
         {
             var factory = provider.GetRequiredService<GrinDbContextFactory>();

@@ -16,11 +16,14 @@ public class GrinCheckoutController : Controller
 {
     private readonly GrinService _grinService;
     private readonly GrinRPCProvider _rpcProvider;
-    private readonly GrinRateProvider _rateProvider;
+    // Cached + health-tracked rate provider. NEVER inject GrinRateProvider
+    // here directly — that bypasses caching and pays a synchronous
+    // Gate.io HTTP call on every invoice creation. See Plugin.cs DI chain.
+    private readonly GrinRateHealth _rateProvider;
     private readonly ILogger<GrinCheckoutController> _logger;
 
     public GrinCheckoutController(GrinService grinService, GrinRPCProvider rpcProvider,
-        GrinRateProvider rateProvider, ILogger<GrinCheckoutController> logger)
+        GrinRateHealth rateProvider, ILogger<GrinCheckoutController> logger)
     {
         _grinService = grinService;
         _rpcProvider = rpcProvider;

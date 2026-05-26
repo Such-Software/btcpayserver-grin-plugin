@@ -5,6 +5,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/). Patch-version-only releases
 are skipped when they fix a single bug — see `git log` for the full history.
 
+## [1.0.11] — 2026-05-26
+
+Reliability follow-up to v1.0.10. A real production incident on
+suchshop.lol — first invoice after a BTCPay container restart 400'd
+because `GrinRateProvider` had no caching: every invoice creation
+made a fresh HTTP request to Gate.io, and the cold first call
+failed (transient network, slow TLS, or empty bid/ask — exact root
+cause unrecoverable from logs).
+
+### Added
+
+- **Cached rate provider** — `GrinRateProvider` is now wrapped at the
+  DI layer in BTCPay's `BackgroundFetcherRateProvider` (60s refresh,
+  10min validity, stale-while-revalidate). Invoice creation no
+  longer pays a fresh Gate.io HTTP round-trip per invoice.
+- **Startup warm-up** — `GrinRateHealth` is registered as
+  `IHostedService` and pre-fetches the rate at plugin load, so the
+  first customer who reaches checkout doesn't pay the cold-cache
+  cost.
+- **Rate-feed health tracking** — `GrinRateHealth` counts
+  consecutive failures, records last-success timestamp, and surfaces
+  a state enum (Fresh / Stale / Failing / NeverFetched) that the
+  settings page + BTCPay sync footer render as a coloured dot:
+  - 0-5 min since last success + 0-1 failures → green "healthy"
+  - 5-30 min OR 2-3 failures → amber "degraded"
+  - >30 min OR 4+ failures → red "FAILING"
+- **Operator-visible warnings** — when state is failing, the
+  settings page shows an explicit alert ("invoice creation will
+  start failing once cache expires"), and the BTCPay-wide sync
+  footer (the one that already shows Grin node sync) shows the
+  same status. An operator who never opens the store settings page
+  still sees the warning from anywhere in BTCPay.
+- **Structured error logging** in `GrinRateProvider` — fetch
+  failures now log the HTTP status, response body preview (up to
+  500 chars), and transport-layer error class. Eliminates the
+  "(400): " mystery from the v1.0.10 incident.
+- **HTTP timeout** — `GrinRateProvider` now caps each Gate.io
+  request at 10 seconds (was effectively unlimited via the default
+  HttpClient timeout). Fails fast on slow/hung requests so the
+  health counter increments visibly.
+- 6 new tests covering rate-health state transitions (never_fetched
+  → fresh → stale → failing → recovery).
+
+### Fixed
+
+- First invoice after a BTCPay restart no longer depends on a live
+  Gate.io call (was the source of the 2026-05-26 P0 incident).
+- Repeated rate-fetch failures are now visible to the operator
+  before customers start seeing 400s at checkout.
+
 ## [1.0.10] — 2026-05-26
 
 First "ready for community testing" release. Adds wallet-balance

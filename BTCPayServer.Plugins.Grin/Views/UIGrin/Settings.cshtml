@@ -62,6 +62,67 @@
     }
 }
 
+@{
+    var rateHealth = ViewBag.RateHealth as BTCPayServer.Plugins.Grin.Services.GrinRateHealthStatus;
+}
+
+@if (rateHealth != null)
+{
+    var (rateClass, rateText) = rateHealth.State switch
+    {
+        "fresh" => ("enabled", "Rate feed healthy"),
+        "stale" => ("pending", "Rate feed degraded"),
+        "failing" => ("disabled", "Rate feed FAILING"),
+        "never_fetched" => ("pending", "Rate feed not yet fetched"),
+        _ => ("disabled", "Rate feed: unknown")
+    };
+    string ageText = "";
+    if (rateHealth.LastSuccess.HasValue)
+    {
+        var age = DateTimeOffset.UtcNow - rateHealth.LastSuccess.Value;
+        if (age.TotalSeconds < 60)
+            ageText = $"updated {(int)age.TotalSeconds}s ago";
+        else if (age.TotalMinutes < 60)
+            ageText = $"updated {(int)age.TotalMinutes}m ago";
+        else
+            ageText = $"updated {(int)age.TotalHours}h ago";
+    }
+    <div class="d-flex align-items-center mb-4 p-3 bg-tile rounded">
+        <span class="me-2 btcpay-status btcpay-status--@rateClass"></span>
+        <span>@rateText</span>
+        @if (!string.IsNullOrEmpty(ageText))
+        {
+            <span class="ms-2 text-muted small">@ageText</span>
+        }
+        @if (rateHealth.ConsecutiveFailures > 0)
+        {
+            <span class="ms-2 text-muted small">— @rateHealth.ConsecutiveFailures consecutive failure@(rateHealth.ConsecutiveFailures == 1 ? "" : "s")</span>
+        }
+        @if (rateHealth.State == "failing" && !string.IsNullOrEmpty(rateHealth.LastError))
+        {
+            <span class="ms-2 text-muted small">— @rateHealth.LastError</span>
+        }
+    </div>
+
+    @if (rateHealth.State == "failing")
+    {
+        <div class="alert alert-warning" role="alert">
+            <strong>Heads-up:</strong> the GRIN/USDT rate feed from Gate.io
+            is failing. New invoice creation will continue to work as long
+            as the cached rate is still within its 10-minute validity
+            window, but will start returning errors once that expires.
+            Check that this server can reach <code>api.gateio.ws</code> and
+            that the Gate.io API is up.
+        </div>
+    }
+    else if (rateHealth.State == "stale")
+    {
+        <div class="alert alert-light" role="alert" style="border-color: #f0ad4e;">
+            The rate feed has missed @rateHealth.ConsecutiveFailures recent refresh@(rateHealth.ConsecutiveFailures == 1 ? "" : "es"). Still serving cached data; will recover once Gate.io responds normally.
+        </div>
+    }
+}
+
 @if (balance != null)
 {
     <div class="mb-4 p-3 bg-tile rounded">

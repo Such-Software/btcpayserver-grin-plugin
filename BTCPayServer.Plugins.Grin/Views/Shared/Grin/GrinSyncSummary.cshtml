@@ -1,6 +1,8 @@
 @inject BTCPayServer.Plugins.Grin.Services.GrinSyncService SyncService
+@inject BTCPayServer.Plugins.Grin.Services.GrinRateHealth RateHealth
 @{
     var status = SyncService.GetCachedStatus();
+    var rateStatus = RateHealth.GetStatus();
 }
 @if (status != null)
 {
@@ -41,6 +43,22 @@
             {
                 <li>@status.Error</li>
             }
+        }
+        @* Rate feed health — surfaced here so an operator who never opens
+           the per-store Grin settings still sees a yellow/red dot in the
+           BTCPay-wide sync footer when Gate.io rate fetches are failing.
+           Fresh = silent (no spam); stale + failing show a status line. *@
+        @if (rateStatus.State == "stale")
+        {
+            <li class="text-muted">Rate feed degraded (@rateStatus.ConsecutiveFailures recent failure@(rateStatus.ConsecutiveFailures == 1 ? "" : "s"))</li>
+        }
+        else if (rateStatus.State == "failing")
+        {
+            <li class="text-danger">Rate feed FAILING — invoice creation will start failing once cache expires</li>
+        }
+        else if (rateStatus.State == "never_fetched")
+        {
+            <li class="text-muted">Rate feed not yet fetched</li>
         }
     </ul>
 }
