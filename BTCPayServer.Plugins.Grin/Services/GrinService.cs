@@ -204,24 +204,7 @@ public class GrinService
 
         try
         {
-            var payload = new
-            {
-                @event = eventType,
-                invoiceId = invoice.Id,
-                storeId = invoice.StoreId,
-                invoice = new
-                {
-                    id = invoice.Id,
-                    status = invoice.Status.ToString(),
-                    amount = invoice.AmountNanogrin / 1_000_000_000m,
-                    confirmations = invoice.Confirmations,
-                    metadata = new
-                    {
-                        session_id = invoice.SessionId ?? "",
-                        order_id = invoice.OrderId ?? "",
-                    },
-                },
-            };
+            var payload = GrinWebhookPayload.Build(invoice, eventType);
 
             var json = System.Text.Json.JsonSerializer.Serialize(payload);
             var body = System.Text.Encoding.UTF8.GetBytes(json);

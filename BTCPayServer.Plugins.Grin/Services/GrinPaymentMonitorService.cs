@@ -261,22 +261,7 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
 
         try
         {
-            var amountGrin = invoice.AmountNanogrin / 1_000_000_000m;
-            var payload = new
-            {
-                @event = eventType,
-                invoice = new
-                {
-                    id = invoice.Id,
-                    status = invoice.Status.ToString(),
-                    amount = amountGrin,
-                    metadata = new
-                    {
-                        session_id = invoice.SessionId ?? "",
-                        medusa_cart_id = invoice.OrderId ?? "",
-                    }
-                }
-            };
+            var payload = GrinWebhookPayload.Build(invoice, eventType);
 
             var json = JsonSerializer.Serialize(payload);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
