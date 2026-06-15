@@ -21,6 +21,7 @@ partial class GrinDbContextModelSnapshot : ModelSnapshot
         {
             b.Property<string>("Id").HasColumnType("text");
             b.Property<long>("AmountNanogrin").HasColumnType("bigint");
+            b.Property<string>("BtcpayInvoiceId").HasColumnType("text");
             b.Property<int>("Confirmations").HasColumnType("integer");
             b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone");
             b.Property<string>("IssuedSlatepack").HasColumnType("text");

@@ -22,6 +22,21 @@ public class GrinInvoice
     public string RedirectUrl { get; set; }      // Post-payment redirect URL
 
     /// <summary>
+    /// If non-null, this <see cref="GrinInvoice"/> was created by the
+    /// BTCPay first-class payment flow (<c>GrinPaymentMethodHandler</c>)
+    /// and corresponds to a row in BTCPay's own <c>Invoices</c> table.
+    /// When the monitor confirms this invoice on-chain, the Phase B
+    /// bridge will call <c>PaymentService.AddPayment</c> with this id
+    /// to flip the BTCPay invoice to paid.
+    ///
+    /// Null for invoices created via the legacy direct route
+    /// (<c>POST /stores/{id}/plugins/grin/invoices</c>) — those are
+    /// Medusa-bound and use our own webhook queue instead of BTCPay's
+    /// event machinery.
+    /// </summary>
+    public string BtcpayInvoiceId { get; set; }
+
+    /// <summary>
     /// True once an <c>InvoicePaymentSettled</c> webhook has been
     /// successfully dispatched for this invoice's current
     /// confirmation. Acts as the cross-process / cross-call atomic

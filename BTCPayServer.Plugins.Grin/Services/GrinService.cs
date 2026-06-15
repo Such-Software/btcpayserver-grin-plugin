@@ -99,7 +99,8 @@ public class GrinService
 
     public async Task<GrinInvoice> CreateInvoice(string invoiceId, string storeId,
         long amountNanogrin, string slatepackAddress, string issuedSlatepack, string txSlateId,
-        string sessionId = null, string orderId = null, string redirectUrl = null)
+        string sessionId = null, string orderId = null, string redirectUrl = null,
+        string btcpayInvoiceId = null)
     {
         await using var ctx = _dbContextFactory.CreateContext();
         var invoice = new GrinInvoice
@@ -113,6 +114,7 @@ public class GrinService
             SessionId = sessionId,
             OrderId = orderId,
             RedirectUrl = redirectUrl,
+            BtcpayInvoiceId = btcpayInvoiceId,
             Status = GrinInvoiceStatus.Pending,
             CreatedAt = DateTimeOffset.UtcNow
         };

@@ -1,6 +1,8 @@
 using BTCPayServer.Abstractions.Contracts;
 using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Abstractions.Services;
+using BTCPayServer.Payments;
+using BTCPayServer.Plugins.Grin.Payments;
 using BTCPayServer.Plugins.Grin.Services;
 using BTCPayServer.Rating;
 using System;
@@ -76,5 +78,16 @@ public class Plugin : BaseBTCPayServerPlugin
             var factory = provider.GetRequiredService<GrinDbContextFactory>();
             factory.ConfigureBuilder(o);
         });
+
+        // P1: register Grin as a first-class BTCPay payment method.
+        // BTCPay's invoice creation flow can now dispatch into
+        // GrinPaymentMethodHandler.ConfigurePrompt, the store settings
+        // page will list Grin as a selectable payment method, and the
+        // Greenfield API will return Grin prompts on its invoice
+        // endpoints. Phase B (payment-back bridge from monitor to
+        // PaymentService.AddPayment) is still deferred — see comment
+        // on GrinPaymentMethodHandler.
+        services.AddSingleton<IPaymentMethodHandler, GrinPaymentMethodHandler>();
+        services.AddSingleton<IPaymentLinkExtension, GrinPaymentLinkExtension>();
     }
 }
