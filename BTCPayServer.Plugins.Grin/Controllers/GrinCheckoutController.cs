@@ -159,8 +159,31 @@ public class GrinCheckoutController : Controller
         // Auto-redirect on Broadcast (payment detected, awaiting confirmations)
         // when redirectUrl is set. The order is already created in Medusa via
         // the InvoiceProcessing webhook dispatched in SubmitSlatepack.
+        //
+        // Open-redirect guard: validate the stored RedirectUrl before
+        // bouncing the customer there. RedirectUrl is supplied by the
+        // e-commerce integration at invoice-creation time and stored
+        // verbatim. Without validation, an attacker who could call
+        // CreateInvoice with a hostile RedirectUrl (or who later
+        // mutates the row via DB access) could 302 customers to a
+        // phishing page under this trusted BTCPay hostname.
+        //
+        // Acceptable forms: absolute https:// URLs with a host whose
+        // scheme + structure is well-formed. Rejected:
+        //   - javascript:, data:, file:, mailto:, tel: (script
+        //     injection or out-of-band action)
+        //   - URLs with embedded credentials (user:pass@host — the
+        //     classic open-redirect tactic that confuses humans about
+        //     the actual host)
+        //   - http:// in production (downgrade attack on customers
+        //     coming from a TLS-secured BTCPay page)
+        //
+        // Full per-store allowlist is TODO P9 — what's here is the
+        // pragmatic version that blocks the obvious attacks without
+        // requiring per-tenant config.
         if (invoice.Status == GrinInvoiceStatus.Broadcast
-            && !string.IsNullOrEmpty(invoice.RedirectUrl))
+            && !string.IsNullOrEmpty(invoice.RedirectUrl)
+            && IsSafeRedirect(invoice.RedirectUrl))
         {
             return Redirect(invoice.RedirectUrl);
         }
@@ -272,14 +295,24 @@ public class GrinCheckoutController : Controller
             await _grinService.UpdateInvoiceStatus(invoiceId, GrinInvoiceStatus.Broadcast);
             _logger.LogInformation("Grin invoice {InvoiceId} finalized and broadcast", invoiceId);
 
-            // Dispatch webhook: payment detected (broadcast to network)
-            // This triggers "authorized" in Medusa, creating the order immediately.
+            // Dispatch webhook: payment detected (broadcast to network).
+            // This triggers "authorized" in Medusa, creating the order
+            // immediately so the customer sees a confirmation page even
+            // before the chain confirms. `await` matters — pre-2026-06-15
+            // this call was fire-and-forget, which under any contention
+            // could drop the broadcast event entirely (the controller
+            // returned the redirect to the customer before the POST left
+            // the box). Now the request waits for the dispatch to either
+            // succeed (logged at info inside DispatchWebhook) or fail
+            // (caught + logged here). Customer wait is bounded by the
+            // RpcTimeout in GrinRPCClient (15s) so this won't hang the
+            // redirect indefinitely.
             try
             {
                 var updatedInvoice = await _grinService.GetInvoice(invoiceId);
                 if (updatedInvoice != null)
                 {
-                    _grinService.DispatchWebhook(settings, updatedInvoice, "InvoiceProcessing");
+                    await _grinService.DispatchWebhook(settings, updatedInvoice, "InvoiceProcessing");
                 }
             }
             catch (Exception webhookEx)
@@ -346,10 +379,48 @@ public class GrinCheckoutController : Controller
 
                                 if (confirmations >= settings.MinConfirmations)
                                 {
+                                    // Snapshot prior status BEFORE the transition so
+                                    // we can detect whether THIS caller is the one
+                                    // promoting the invoice to Confirmed. Customer-
+                                    // side /status polls every 5s; background monitor
+                                    // every 30s. Both end up here on a freshly-
+                                    // confirmed invoice. Whoever wins dispatches the
+                                    // InvoicePaymentSettled webhook.
+                                    var wasBroadcast = invoice.Status == GrinInvoiceStatus.Broadcast;
+
                                     await _grinService.UpdateInvoiceStatus(invoiceId,
                                         GrinInvoiceStatus.Confirmed, confirmations);
                                     invoice.Status = GrinInvoiceStatus.Confirmed;
                                     invoice.Confirmations = confirmations;
+
+                                    // Pre-2026-06-15 the settlement webhook only fired
+                                    // from GrinPaymentMonitorService.CheckBroadcastInvoices.
+                                    // The monitor's loop guard
+                                    // (`if (invoice.Status != Broadcast) continue;`)
+                                    // means once ANY caller flips to Confirmed the
+                                    // monitor never re-examines the row. If the
+                                    // browser /status poll won the race, the webhook
+                                    // never fired and the merchant order sat in
+                                    // 'authorized' forever — that's how 3 staging
+                                    // Grin orders got stuck (recovered via SQL
+                                    // 2026-06-15). This branch closes that race for
+                                    // the common case; full transactional
+                                    // idempotency lock is TODO B4 (add
+                                    // SettlementWebhookSent column + atomic guard).
+                                    if (wasBroadcast)
+                                    {
+                                        try
+                                        {
+                                            await _grinService.DispatchWebhook(
+                                                settings, invoice, "InvoicePaymentSettled");
+                                        }
+                                        catch (Exception webhookEx)
+                                        {
+                                            _logger.LogWarning(webhookEx,
+                                                "Failed to dispatch InvoicePaymentSettled from Status endpoint for invoice {InvoiceId}",
+                                                invoiceId);
+                                        }
+                                    }
                                 }
                                 else if (confirmations > invoice.Confirmations)
                                 {
@@ -448,6 +519,37 @@ public class GrinCheckoutController : Controller
             return 1;
 
         return (int)(currentHeight - outputHeight + 1);
+    }
+
+    /// <summary>
+    /// Validate a stored RedirectUrl before bouncing the customer there.
+    /// Permissive enough to accept any legitimate e-commerce return URL
+    /// (https + well-formed) and strict enough to block the obvious
+    /// open-redirect tactics (embedded creds, script schemes, http
+    /// downgrade). Per-store allowlist is TODO P9.
+    /// </summary>
+    private static bool IsSafeRedirect(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+
+        // Must be a parseable absolute URI.
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed)) return false;
+
+        // Only https; http downgrade attack on a customer arriving from
+        // BTCPay's TLS-secured checkout is unacceptable.
+        if (parsed.Scheme != Uri.UriSchemeHttps) return false;
+
+        // No `user:pass@host` form — classic open-redirect obfuscation.
+        if (!string.IsNullOrEmpty(parsed.UserInfo)) return false;
+
+        // Host must be non-empty and not a loopback / link-local — those
+        // would let an attacker pivot the customer's browser onto our
+        // internal network surfaces. Real storefronts run on public
+        // hosts.
+        if (string.IsNullOrEmpty(parsed.Host)) return false;
+        if (parsed.IsLoopback) return false;
+
+        return true;
     }
 }
 

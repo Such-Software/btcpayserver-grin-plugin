@@ -13,6 +13,18 @@ namespace BTCPayServer.Plugins.Grin;
 
 public class GrinRPCClient
 {
+    /// <summary>
+    /// Cap every wallet-RPC HTTP call at 15 seconds. .NET's default
+    /// <see cref="HttpClient"/> timeout is 100s; without overriding it,
+    /// a stuck grin-wallet (network blip, RPC deadlock, OOM) blocks the
+    /// 30s payment monitor tick for up to 100 seconds. Under load the
+    /// monitor's async-void timer can then re-enter while the previous
+    /// tick is still hanging, snowballing work. 15s is generous for
+    /// healthy responses (most are &lt; 200ms) and short enough that the
+    /// next monitor tick gets a fair turn.
+    /// </summary>
+    private static readonly TimeSpan RpcTimeout = TimeSpan.FromSeconds(15);
+
     private readonly HttpClient _http;
     private readonly ILogger<GrinRPCClient> _logger;
     private byte[] _sharedKey;
@@ -26,7 +38,11 @@ public class GrinRPCClient
     public GrinRPCClient(ILogger<GrinRPCClient> logger)
     {
         _logger = logger;
-        _http = new HttpClient();
+        // Top-level HttpClient timeout is the floor across every call.
+        // Per-call CTS cancellation also fires at RpcTimeout for clean
+        // wire-up; the two together guarantee the call returns or
+        // throws within RpcTimeout regardless of the failure mode.
+        _http = new HttpClient { Timeout = RpcTimeout };
     }
 
     public void Configure(string ownerApiUrl, string walletPassword, string apiSecret)

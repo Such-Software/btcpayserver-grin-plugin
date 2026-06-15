@@ -13,9 +13,15 @@ namespace BTCPayServer.Plugins.Grin;
 
 public class Plugin : BaseBTCPayServerPlugin
 {
+    // Tracks the BTCPay Server release we actually build + test against
+    // (see the git submodule in `btcpayserver/`). Was `>=1.12.0` which
+    // pre-dates the .NET 10 cutover and would silently install on hosts
+    // we've never validated against. README + SETUP.md both require
+    // BTCPayServer 2.3.9+ since that's where .NET 10 + the antiforgery
+    // filter changes that this plugin compiles against landed.
     public override IBTCPayServerPlugin.PluginDependency[] Dependencies { get; } =
     {
-        new IBTCPayServerPlugin.PluginDependency { Identifier = nameof(BTCPayServer), Condition = ">=1.12.0" }
+        new IBTCPayServerPlugin.PluginDependency { Identifier = nameof(BTCPayServer), Condition = ">=2.3.9" }
     };
 
     public override void Execute(IServiceCollection services)
