@@ -6,29 +6,36 @@ Grin is a privacy-preserving cryptocurrency using MimbleWimble. Unlike Bitcoin, 
 
 ## How It Works
 
+Grin is a first-class payment method in BTCPay. Operators enable it on
+a store the same way they enable Bitcoin or Lightning; integrators
+create invoices through BTCPay's standard Greenfield API and receive
+the same `InvoicePaymentSettled` webhook BTCPay delivers for every
+other payment method.
+
 1. Merchant configures their `grin-wallet` connection in BTCPay store settings
-2. Customer creates an invoice (via API or storefront integration)
-3. Checkout page shows a slatepack message (with QR code) for the customer to process in their wallet
-4. Customer pastes their wallet's response slatepack back into the checkout page
-5. Plugin finalizes and broadcasts the transaction
-6. Background service monitors confirmations and marks the invoice complete
+2. Integrator creates a BTCPay invoice via Greenfield with Grin as the payment method (or a customer hits the BTCPay-hosted checkout)
+3. Plugin's `IPaymentMethodHandler` issues a Grin wallet tx + populates the payment prompt with the slatepack address + message
+4. Customer pastes their wallet's response slatepack on the checkout page; plugin finalizes + broadcasts the transaction
+5. Background service monitors confirmations and, on settlement, hands a `PaymentData` to BTCPay's `PaymentService` — same code path Bitcoin and Lightning use
+6. BTCPay's event aggregator + WebhookSender fire the standard `InvoicePaymentSettled` event to every webhook URL the operator has subscribed
 
 ```
-Customer                    BTCPay (this plugin)              grin-wallet
-   |                              |                               |
-   |  --- create invoice -------> |  --- issue_invoice_tx ------> |
-   |  <-- slatepack S1 ---------  |  <-- slatepack S1 ----------- |
-   |                              |                               |
-   |  (process S1 in wallet)      |                               |
-   |                              |                               |
-   |  --- paste response S2 ----> |  --- finalize_tx (S2) ------> |
-   |                              |  --- post_tx ---------------> |
-   |  <-- "payment broadcast" --- |                               |
-   |                              |                               |
-   |                            [monitor service polls every 30s] |
-   |                              |  --- retrieve_txs ----------> |
-   |                              |  --- node_height -----------> |
-   |  <-- "confirmed" ----------- |  (confirmations >= threshold) |
+Integrator                BTCPay invoice flow            Plugin (handler)             grin-wallet
+   |                              |                              |                          |
+   |  POST /api/v1/.../invoices > |  --- ConfigurePrompt() ----> |  --- issue_invoice_tx -> |
+   |                              |                              |  <-- slatepack S1 ------ |
+   |  <-- invoice + prompt ------ |  <-- Destination + Details - |                          |
+   |                              |                              |                          |
+   |       (customer is sent to the BTCPay checkout)             |                          |
+   |                              |                              |                          |
+                                  |   customer pastes S2 ----->  |  --- finalize_tx (S2) -> |
+                                  |                              |  --- post_tx ----------> |
+                                  |                              |                          |
+                                  |  [monitor polls every 30s, calls retrieve_txs]          |
+                                  |                              |                          |
+                                  |  <-- PaymentService.AddPayment(Settled) --              |
+   <- InvoicePaymentSettled       |  --- event aggregator fires PaymentSettled ---          |
+      webhook (BTCPay-native)     |  --- WebhookSender delivers to subscribed URLs          |
 ```
 
 ## Requirements
@@ -92,28 +99,36 @@ See [SETUP.md](SETUP.md) for detailed deployment instructions including Docker n
 
 ## Creating Invoices
 
-Invoices are created via the plugin's REST API:
+Invoices use BTCPay's standard Greenfield API. Pick `GRIN-CHAIN` in
+the `paymentMethods` array (or omit `paymentMethods` to enable every
+method the store has configured):
 
 ```bash
-curl -X POST "http://localhost:23000/stores/{storeId}/plugins/grin/invoices" \
+curl -X POST "https://your.btcpay/api/v1/stores/{storeId}/invoices" \
+  -H "Authorization: token <btcpay-api-key>" \
   -H "Content-Type: application/json" \
-  -d '{"amount": 1.5, "orderId": "order-123"}'
+  -d '{
+    "amount": "1.5",
+    "currency": "USD",
+    "checkout": { "paymentMethods": ["GRIN-CHAIN"] }
+  }'
 ```
 
-Response:
-```json
-{
-  "invoiceId": "a1b2c3d4e5f6",
-  "checkoutUrl": "http://localhost:23000/stores/{storeId}/plugins/grin/checkout/a1b2c3d4e5f6",
-  "amount": 1.5,
-  "amountNanogrin": 1500000000,
-  "txSlateId": "...",
-  "slatepackAddress": "grin1...",
-  "status": "Pending"
-}
-```
+The response is the standard BTCPay invoice envelope; redirect the
+customer to `checkoutLink` to complete payment. The Grin payment
+prompt — slatepack address + message + tx slate id — is available
+under `paymentMethods[].details` (or the `/api/v1/stores/{storeId}/invoices/{id}/payment-methods`
+endpoint).
 
-Direct the customer to the `checkoutUrl` to complete payment.
+## Webhooks
+
+Subscribe a webhook in **Store Settings → Webhooks** with the
+`Invoice payment settled` event selected. The plugin records each
+on-chain confirmation as a standard `PaymentData` row; BTCPay's
+event aggregator + built-in `WebhookSender` deliver the canonical
+`InvoicePaymentSettled` event to every subscribed URL, signed with
+the BTCPay-native `BTCPay-Sig: sha256=<hmac>` header. No plugin-
+specific webhook configuration is required.
 
 ## Invoice Lifecycle
 
@@ -142,18 +157,27 @@ BTCPayServer.Plugins.Grin/
 ├── GrinRPCClient.cs                   # v3 encrypted Owner API client
 ├── Controllers/
 │   ├── UIGrinController.cs            # Settings UI (store admin)
-│   └── GrinCheckoutController.cs      # Checkout flow + REST API
+│   └── GrinCheckoutController.cs      # Customer-facing checkout flow
 ├── Data/
 │   ├── GrinDbContext.cs               # Plugin's own DB context
-│   ├── GrinInvoice.cs                 # Invoice model
-│   └── GrinStoreSettings.cs           # Per-store wallet config
+│   ├── GrinInvoice.cs                 # Internal invoice model (links to BTCPay invoice)
+│   ├── GrinStoreSettings.cs           # Per-store wallet config
+│   └── GrinWebhookDelivery.cs         # Internal queue (legacy direct route only)
+├── Payments/                          # IPaymentMethodHandler integration
+│   ├── GrinPaymentMethodConstants.cs  # "GRIN-CHAIN" PaymentMethodId
+│   ├── GrinPaymentMethodHandler.cs    # ConfigurePrompt / BeforeFetchingRates
+│   ├── GrinPaymentLinkExtension.cs    # Slatepack payment-link surface
+│   ├── GrinPaymentPromptDetails.cs    # JSON shape stored on PaymentPrompt
+│   └── GrinPaymentMethodConfig.cs     # Per-store payment-method config
 ├── Services/
 │   ├── GrinService.cs                 # Business logic, price fetching
 │   ├── GrinRPCProvider.cs             # Per-store RPC client cache
 │   ├── GrinRateProvider.cs            # BTCPay rate engine integration
 │   ├── GrinPaymentMonitorService.cs   # Background confirmation tracker
-│   ├── GrinSyncService.cs            # Node sync status polling (30s)
-│   ├── GrinSyncSummaryProvider.cs    # BTCPay footer panel integration
+│   ├── GrinSettlementDispatcher.cs    # Settlement → PaymentService.AddPayment
+│   ├── GrinSyncService.cs             # Node sync status polling (30s)
+│   ├── GrinSyncSummaryProvider.cs     # BTCPay footer panel integration
+│   ├── UrlSafetyValidator.cs          # SSRF guard on settings URLs
 │   └── GrinDbContextFactory.cs        # DB context factory
 ├── Views/
 │   ├── UIGrin/Settings.cshtml         # Store settings + invoice list
@@ -197,23 +221,15 @@ For the full security policy + responsible disclosure process, see
 
 ## Limitations & Known Issues
 
-This release is labelled "ready for community testing" — production-
-ready for early adopters, with a short list of known gaps:
-
 - **QR code on checkout is hard to scan** with mobile cameras. The
   slatepack payload is 500–1500 chars, producing a Version 30+ QR
   with ~1px modules at default zoom. Workaround: customers paste the
   slatepack manually. Fix (animated multi-frame QR via UR / BBQr) is
-  on the roadmap for the next release.
-- **Webhook delivery has no retry queue.** If your consumer is
-  unreachable for 30s+ around a confirmation event, the notification
-  is logged-and-dropped. Acceptable for low-volume stores monitoring
-  their logs; high-volume operators should wait for the retry
-  feature.
+  on the roadmap.
 - **Integration tests** run against pure helpers (reorg decision,
-  HMAC signature, encrypted columns). A real grin-wallet integration
-  test isn't in CI yet — manual end-to-end is documented in
-  `SETUP.md` under "Accept your first payment."
+  HMAC signature, encrypted columns, URL safety). A real
+  grin-wallet integration test isn't in CI yet — manual end-to-end
+  is documented in `SETUP.md` under "Accept your first payment."
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history and a
 detailed view of what shipped when.

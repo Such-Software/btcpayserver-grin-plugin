@@ -5,6 +5,101 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/). Patch-version-only releases
 are skipped when they fix a single bug — see `git log` for the full history.
 
+## [1.3.0] — 2026-06-15
+
+### Added
+
+- **First-class BTCPay payment method (`GRIN-CHAIN`).** The plugin
+  now implements `IPaymentMethodHandler<GrinPaymentMethodConfig>` and
+  `IPaymentLinkExtension`, registering Grin as a payment method
+  alongside Bitcoin / Lightning / LNURL. Stores can enable Grin from
+  Store Settings → Payment Methods and integrators create invoices
+  via the standard Greenfield API
+  (`POST /api/v1/stores/{storeId}/invoices` with `paymentMethods:
+  ["GRIN-CHAIN"]`). Settled payments flow through BTCPay's
+  `PaymentService.AddPayment`, BTCPay's event aggregator fires the
+  canonical `InvoicePaymentSettled` event, and the built-in
+  `WebhookSender` delivers the standard webhook payload — same
+  contract every other BTCPay payment method uses.
+
+- **Persistent webhook delivery queue + retry worker** for the
+  internal direct route. New `GrinWebhookDeliveries` table; a
+  `GrinWebhookDeliveryWorker` HostedService ticks every 5s and
+  retries failures on a 0s / 30s / 2m / 10m / 1h / 6h / 24h backoff
+  schedule before dead-lettering. Each delivery captures payload at
+  enqueue time, recomputes the HMAC signature per attempt against
+  the live secret, and surfaces non-2xx responses + connection
+  failures with structured fields (`LastResponseCode`, `LastError`,
+  `AttemptCount`). Replaces the previous fire-and-forget POST.
+
+- **Cross-process settlement guard.** A `SettlementWebhookSent`
+  boolean column on `GrinInvoices` + a transactional
+  `TryMarkSettlementWebhookSent` helper ensure the customer-side
+  `/status` poll (5s) and the background monitor (30s) can't both
+  fire the settlement webhook for the same confirmation event.
+  Whoever wins the atomic UPDATE owns the dispatch; the other
+  silently skips. Failed dispatches revert the guard so the
+  monitor's `RetryUnsignaledSettlements` tick takes the next shot.
+
+- **Greenfield-style API key auth on `POST /invoices`.** The
+  internal direct route now requires
+  `[Authorize(Policy = Policies.CanCreateInvoice,
+  AuthenticationSchemes = AuthenticationSchemes.Greenfield)]` —
+  matches the convention every other invoice-creating endpoint in
+  BTCPay uses.
+
+- **SSRF guard on operator-editable URLs.** Save-time validation on
+  `WebhookUrl` / `NodeApiUrl` / `OwnerApiUrl` rejects non-http(s)
+  schemes, URLs with embedded credentials, IMDS / cloud-metadata
+  hosts (`169.254.169.254`, `metadata.google.internal`,
+  `metadata.aws.internal`, `metadata.azure.com`, `fd00:ec2::254`),
+  and URLs longer than 4096 chars. Loopback / RFC1918 / link-local
+  hosts are warned but allowed (the standard docker-network
+  topology has the wallet RPC on a private address).
+
+- **GitHub Actions CI workflow** at `.github/workflows/dotnet.yml`.
+  Build + test on push to master, pull requests, and manual
+  dispatch. NuGet cache keyed by csproj hashes; concurrency cancels
+  in-flight runs on the same branch.
+
+- **HttpClient timeout (15s) on `GrinRPCClient`.** Was previously
+  100s (.NET default), letting a stuck wallet block the monitor's
+  30s tick for up to 100 seconds.
+
+- **`[Authorize]` + `[DbContext]` attributes** on all migrations
+  (required for EF Core discovery; an earlier migration that
+  shipped without them only applied after the attributes were
+  added).
+
+### Changed
+
+- README + SETUP describe the BTCPay-canonical setup as the primary
+  (and only documented) integration path. The internal direct route
+  at `POST /stores/{storeId}/plugins/grin/invoices` still exists
+  for backward compatibility but is no longer mentioned in any
+  user-facing docs — new integrations should use Greenfield.
+
+- Webhook payloads through the internal queue route now include a
+  `btcpay-grin-delivery-id` and `btcpay-grin-attempt` header so
+  receivers can correlate retries to a single logical delivery.
+
+- Test project's csproj now references `Microsoft.EntityFrameworkCore` +
+  `Npgsql.EntityFrameworkCore.PostgreSQL` directly (the main plugin
+  only ships them in non-Release builds, since BTCPay supplies the
+  runtime at load time — but the test runner isn't BTCPay).
+
+### Internal
+
+- New `GrinSettlementDispatcher` service routes Confirmed events to
+  either BTCPay's `PaymentService` (handler-created invoices) or
+  the internal delivery queue (legacy direct route). One funnel
+  shared by the monitor and the customer-side `/status` poll.
+
+- `GrinService.DispatchWebhook` retired; all webhook emission
+  routes through `GrinWebhookDeliveryService` + worker.
+
+- Build-version dependency bump: `BTCPayServer >= 2.3.9`.
+
 ## [1.2.0] — 2026-05-26
 
 ### Added

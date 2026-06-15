@@ -35,6 +35,11 @@ public class Plugin : BaseBTCPayServerPlugin
         services.AddSingleton<GrinRPCProvider>();
         services.AddSingleton<GrinService>();
         services.AddSingleton<GrinWebhookDeliveryService>();
+        // Settlement dispatcher — routes Confirmed events either to
+        // BTCPay's PaymentService (for handler-created invoices) or
+        // to our delivery queue (legacy direct route). One funnel
+        // shared by the monitor + the customer-side /status poll.
+        services.AddSingleton<GrinSettlementDispatcher>();
         services.AddSingleton<GrinSyncService>();
         services.AddHostedService(sp => sp.GetRequiredService<GrinSyncService>());
         services.AddSingleton<ISyncSummaryProvider, GrinSyncSummaryProvider>();

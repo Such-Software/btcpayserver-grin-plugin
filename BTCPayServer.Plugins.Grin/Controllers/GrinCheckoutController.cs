@@ -19,6 +19,7 @@ public class GrinCheckoutController : Controller
 {
     private readonly GrinService _grinService;
     private readonly GrinWebhookDeliveryService _deliveryService;
+    private readonly GrinSettlementDispatcher _settlementDispatcher;
     private readonly GrinRPCProvider _rpcProvider;
     // Cached + health-tracked rate provider. NEVER inject GrinRateProvider
     // here directly — that bypasses caching and pays a synchronous
@@ -28,11 +29,13 @@ public class GrinCheckoutController : Controller
 
     public GrinCheckoutController(GrinService grinService,
         GrinWebhookDeliveryService deliveryService,
+        GrinSettlementDispatcher settlementDispatcher,
         GrinRPCProvider rpcProvider,
         GrinRateHealth rateProvider, ILogger<GrinCheckoutController> logger)
     {
         _grinService = grinService;
         _deliveryService = deliveryService;
+        _settlementDispatcher = settlementDispatcher;
         _rpcProvider = rpcProvider;
         _rateProvider = rateProvider;
         _logger = logger;
@@ -417,13 +420,13 @@ public class GrinCheckoutController : Controller
                                     {
                                         try
                                         {
-                                            await _deliveryService.EnqueueDelivery(
-                                                invoice, settings, "InvoicePaymentSettled");
+                                            await _settlementDispatcher.DispatchSettlement(
+                                                invoice, settings);
                                         }
-                                        catch (Exception enqEx)
+                                        catch (Exception dispatchEx)
                                         {
-                                            _logger.LogError(enqEx,
-                                                "Failed to enqueue InvoicePaymentSettled for invoice {InvoiceId} — reverting guard so the monitor can retry",
+                                            _logger.LogError(dispatchEx,
+                                                "Failed to dispatch InvoicePaymentSettled for invoice {InvoiceId} — reverting guard so the monitor can retry",
                                                 invoiceId);
                                             await _grinService.ResetSettlementWebhookFlag(invoiceId);
                                         }

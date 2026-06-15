@@ -11,6 +11,7 @@ namespace BTCPayServer.Plugins.Grin.Services;
 public class GrinPaymentMonitorService : IHostedService, IDisposable
 {
     private readonly GrinService _grinService;
+    private readonly GrinSettlementDispatcher _settlementDispatcher;
     private readonly GrinWebhookDeliveryService _deliveryService;
     private readonly GrinRPCProvider _rpcProvider;
     private readonly ILogger<GrinPaymentMonitorService> _logger;
@@ -27,11 +28,13 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
     private static readonly TimeSpan ReorgMonitoringWindow = TimeSpan.FromHours(2);
 
     public GrinPaymentMonitorService(GrinService grinService,
+        GrinSettlementDispatcher settlementDispatcher,
         GrinWebhookDeliveryService deliveryService,
         GrinRPCProvider rpcProvider,
         ILogger<GrinPaymentMonitorService> logger)
     {
         _grinService = grinService;
+        _settlementDispatcher = settlementDispatcher;
         _deliveryService = deliveryService;
         _rpcProvider = rpcProvider;
         _logger = logger;
@@ -90,16 +93,15 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
                 {
                     try
                     {
-                        await _deliveryService.EnqueueDelivery(
-                            invoice, settings, "InvoicePaymentSettled");
+                        await _settlementDispatcher.DispatchSettlement(invoice, settings);
                         _logger.LogInformation(
-                            "Settlement webhook enqueued for previously-unsignaled invoice {InvoiceId}",
+                            "Settlement dispatched for previously-unsignaled invoice {InvoiceId}",
                             invoice.Id);
                     }
                     catch (Exception enqEx)
                     {
                         _logger.LogError(enqEx,
-                            "Failed to enqueue settlement retry for invoice {InvoiceId} — reverting guard so the next tick retries",
+                            "Failed to dispatch settlement retry for invoice {InvoiceId} — reverting guard so the next tick retries",
                             invoice.Id);
                         await _grinService.ResetSettlementWebhookFlag(invoice.Id);
                     }
@@ -249,20 +251,19 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
                             invoice.Id, confirmations);
 
                         // Atomic guard against the customer-side /status poll
-                        // (5s) racing this tick (30s) and double-enqueuing the
-                        // same settlement. See GrinService.TryMarkSettlementWebhookSent.
+                        // (5s) racing this tick (30s) and double-dispatching
+                        // the same settlement. See GrinService.TryMarkSettlementWebhookSent.
                         if (await _grinService.TryMarkSettlementWebhookSent(invoice.Id))
                         {
                             invoice.Status = GrinInvoiceStatus.Confirmed;
                             try
                             {
-                                await _deliveryService.EnqueueDelivery(
-                                    invoice, settings, "InvoicePaymentSettled");
+                                await _settlementDispatcher.DispatchSettlement(invoice, settings);
                             }
-                            catch (Exception enqEx)
+                            catch (Exception dispatchEx)
                             {
-                                _logger.LogError(enqEx,
-                                    "Failed to enqueue InvoicePaymentSettled for invoice {InvoiceId} — reverting guard so RetryUnsignaledSettlements can take another shot",
+                                _logger.LogError(dispatchEx,
+                                    "Failed to dispatch InvoicePaymentSettled for invoice {InvoiceId} — reverting guard so RetryUnsignaledSettlements can take another shot",
                                     invoice.Id);
                                 await _grinService.ResetSettlementWebhookFlag(invoice.Id);
                             }
