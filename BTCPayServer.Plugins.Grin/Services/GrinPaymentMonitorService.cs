@@ -1,7 +1,4 @@
 using System;
-using System.Net.Http;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,8 +11,8 @@ namespace BTCPayServer.Plugins.Grin.Services;
 public class GrinPaymentMonitorService : IHostedService, IDisposable
 {
     private readonly GrinService _grinService;
+    private readonly GrinWebhookDeliveryService _deliveryService;
     private readonly GrinRPCProvider _rpcProvider;
-    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<GrinPaymentMonitorService> _logger;
     private Timer _timer;
 
@@ -29,12 +26,14 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
     // invoice is considered final and the monitor stops re-checking.
     private static readonly TimeSpan ReorgMonitoringWindow = TimeSpan.FromHours(2);
 
-    public GrinPaymentMonitorService(GrinService grinService, GrinRPCProvider rpcProvider,
-        IHttpClientFactory httpClientFactory, ILogger<GrinPaymentMonitorService> logger)
+    public GrinPaymentMonitorService(GrinService grinService,
+        GrinWebhookDeliveryService deliveryService,
+        GrinRPCProvider rpcProvider,
+        ILogger<GrinPaymentMonitorService> logger)
     {
         _grinService = grinService;
+        _deliveryService = deliveryService;
         _rpcProvider = rpcProvider;
-        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
@@ -89,17 +88,20 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
 
                 if (await _grinService.TryMarkSettlementWebhookSent(invoice.Id))
                 {
-                    var delivered = await DispatchWebhookAsync(
-                        invoice, settings, "InvoicePaymentSettled");
-                    if (!delivered)
+                    try
                     {
-                        await _grinService.ResetSettlementWebhookFlag(invoice.Id);
-                    }
-                    else
-                    {
+                        await _deliveryService.EnqueueDelivery(
+                            invoice, settings, "InvoicePaymentSettled");
                         _logger.LogInformation(
-                            "Settlement webhook retry succeeded for invoice {InvoiceId}",
+                            "Settlement webhook enqueued for previously-unsignaled invoice {InvoiceId}",
                             invoice.Id);
+                    }
+                    catch (Exception enqEx)
+                    {
+                        _logger.LogError(enqEx,
+                            "Failed to enqueue settlement retry for invoice {InvoiceId} — reverting guard so the next tick retries",
+                            invoice.Id);
+                        await _grinService.ResetSettlementWebhookFlag(invoice.Id);
                     }
                 }
             }
@@ -177,12 +179,13 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
                     await _grinService.UpdateInvoiceStatus(
                         invoice.Id, GrinInvoiceStatus.Broadcast, confirmations);
 
-                    // Fire an InvoiceInvalid webhook so the storefront
+                    // Enqueue an InvoiceInvalid webhook so the storefront
                     // can flip the order back to "awaiting payment"
                     // and notify the customer. Merchants observing
                     // the webhook should NOT ship against this
-                    // invoice until it re-settles.
-                    await DispatchWebhookAsync(invoice, settings, "InvoiceInvalid");
+                    // invoice until it re-settles. Delivery is owned
+                    // by GrinWebhookDeliveryWorker.
+                    await _deliveryService.EnqueueDelivery(invoice, settings, "InvoiceInvalid");
                 }
             }
             catch (Exception ex)
@@ -246,17 +249,21 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
                             invoice.Id, confirmations);
 
                         // Atomic guard against the customer-side /status poll
-                        // (5s) racing this tick (30s) and dispatching the same
-                        // settlement twice. See GrinService.TryMarkSettlementWebhookSent.
+                        // (5s) racing this tick (30s) and double-enqueuing the
+                        // same settlement. See GrinService.TryMarkSettlementWebhookSent.
                         if (await _grinService.TryMarkSettlementWebhookSent(invoice.Id))
                         {
                             invoice.Status = GrinInvoiceStatus.Confirmed;
-                            var delivered = await DispatchWebhookAsync(
-                                invoice, settings, "InvoicePaymentSettled");
-                            if (!delivered)
+                            try
                             {
-                                // Revert so the next tick's
-                                // RetryUnsignaledSettlements loop tries again.
+                                await _deliveryService.EnqueueDelivery(
+                                    invoice, settings, "InvoicePaymentSettled");
+                            }
+                            catch (Exception enqEx)
+                            {
+                                _logger.LogError(enqEx,
+                                    "Failed to enqueue InvoicePaymentSettled for invoice {InvoiceId} — reverting guard so RetryUnsignaledSettlements can take another shot",
+                                    invoice.Id);
                                 await _grinService.ResetSettlementWebhookFlag(invoice.Id);
                             }
                         }
@@ -287,10 +294,11 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
                 _logger.LogInformation("Expired stale invoice {InvoiceId} (created {CreatedAt})",
                     invoice.Id, invoice.CreatedAt);
 
-                // Dispatch expiry webhook
+                // Enqueue expiry webhook so the merchant can release any
+                // reserved stock + show the customer an "expired" page.
                 var settings = await _grinService.GetStoreSettings(invoice.StoreId);
                 if (settings != null)
-                    await DispatchWebhookAsync(invoice, settings, "InvoiceExpired");
+                    await _deliveryService.EnqueueDelivery(invoice, settings, "InvoiceExpired");
 
                 // Cancel the tx in the wallet so funds aren't locked
                 if (settings != null && !string.IsNullOrEmpty(invoice.TxSlateId))
@@ -316,68 +324,11 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
         }
     }
 
-    /// <summary>
-    /// Send webhook to Medusa backend so payment status is updated and order is created.
-    /// Uses the same BTCPay-compat event format that our crypto checkout providers expect.
-    /// Returns <c>true</c> on HTTP 2xx, <c>false</c> on network failure or non-2xx.
-    /// Returns <c>true</c> when no <c>WebhookUrl</c> is configured (nothing to deliver,
-    /// equivalent to success from the caller's perspective so the settlement
-    /// guard stays set rather than churning on every monitor tick).
-    /// </summary>
-    private async Task<bool> DispatchWebhookAsync(GrinInvoice invoice, GrinStoreSettings settings, string eventType)
-    {
-        if (string.IsNullOrEmpty(settings.WebhookUrl))
-            return true;
-
-        try
-        {
-            var amountGrin = invoice.AmountNanogrin / 1_000_000_000m;
-            var payload = new
-            {
-                @event = eventType,
-                invoice = new
-                {
-                    id = invoice.Id,
-                    status = invoice.Status.ToString(),
-                    amount = amountGrin,
-                    metadata = new
-                    {
-                        session_id = invoice.SessionId ?? "",
-                        medusa_cart_id = invoice.OrderId ?? "",
-                    }
-                }
-            };
-
-            var json = JsonSerializer.Serialize(payload);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            // HMAC-SHA256 signature (same format as xmrcheckout/wowcheckout).
-            // Shared helper guarantees this stays bit-for-bit identical
-            // to the GrinService.DispatchWebhook path — otherwise the
-            // two code paths drift on encoding and Medusa rejects half
-            // the deliveries. See WebhookSignatureTests.
-            var sig = WebhookSignature.Compute(
-                settings.WebhookSecret, Encoding.UTF8.GetBytes(json));
-            if (!string.IsNullOrEmpty(sig))
-            {
-                content.Headers.Add("btcpay-sig", sig);
-            }
-
-            var client = _httpClientFactory.CreateClient();
-            client.Timeout = TimeSpan.FromSeconds(15);
-            var response = await client.PostAsync(settings.WebhookUrl, content);
-
-            _logger.LogInformation(
-                "Webhook dispatched for invoice {InvoiceId}: {EventType} → {Url} (status {StatusCode})",
-                invoice.Id, eventType, settings.WebhookUrl, (int)response.StatusCode);
-            return response.IsSuccessStatusCode;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to dispatch webhook for invoice {InvoiceId}", invoice.Id);
-            return false;
-        }
-    }
+    // The monitor used to own its own DispatchWebhookAsync helper.
+    // As of 2026-06-15 (B3) every webhook event flows through the
+    // persistent queue + GrinWebhookDeliveryWorker. The HMAC signing +
+    // POST machinery lives there now so we have a single dispatch
+    // code path to reason about.
 
     private static async Task<long> GetNodeHeight(GrinRPCClient client)
     {

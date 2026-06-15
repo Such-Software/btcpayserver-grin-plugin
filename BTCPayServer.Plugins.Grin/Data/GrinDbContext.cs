@@ -31,6 +31,7 @@ public class GrinDbContext : DbContext
 
     public DbSet<GrinInvoice> GrinInvoices { get; set; }
     public DbSet<GrinStoreSettings> GrinStoreSettings { get; set; }
+    public DbSet<GrinWebhookDelivery> GrinWebhookDeliveries { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -42,6 +43,16 @@ public class GrinDbContext : DbContext
             entity.HasIndex(e => e.TxSlateId);
             entity.HasIndex(e => e.StoreId);
             entity.HasIndex(e => e.Status);
+        });
+
+        modelBuilder.Entity<GrinWebhookDelivery>(entity =>
+        {
+            // Worker query: WHERE Status IN (Pending, Failed)
+            // AND NextAttemptAt <= now(). Compound index supports both.
+            entity.HasIndex(e => new { e.Status, e.NextAttemptAt });
+            // For invoice-scoped reporting + the (invoice, eventType)
+            // dedup guard at enqueue time.
+            entity.HasIndex(e => new { e.InvoiceId, e.EventType });
         });
 
         modelBuilder.Entity<GrinStoreSettings>(entity =>

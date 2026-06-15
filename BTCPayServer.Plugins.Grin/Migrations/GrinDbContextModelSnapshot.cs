@@ -1,4 +1,5 @@
 using System;
+using BTCPayServer.Plugins.Grin;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 
@@ -39,6 +40,30 @@ partial class GrinDbContextModelSnapshot : ModelSnapshot
             b.HasIndex("TxSlateId");
 
             b.ToTable("GrinInvoices", "BTCPayServer.Plugins.Grin");
+        });
+
+        modelBuilder.Entity("BTCPayServer.Plugins.Grin.Data.GrinWebhookDelivery", b =>
+        {
+            b.Property<string>("Id").HasColumnType("text");
+            b.Property<int>("AttemptCount").HasColumnType("integer");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone");
+            b.Property<DateTimeOffset?>("DeliveredAt").HasColumnType("timestamp with time zone");
+            b.Property<string>("EventType").HasColumnType("text");
+            b.Property<string>("InvoiceId").HasColumnType("text");
+            b.Property<DateTimeOffset?>("LastAttemptAt").HasColumnType("timestamp with time zone");
+            b.Property<string>("LastError").HasColumnType("text");
+            b.Property<int?>("LastResponseCode").HasColumnType("integer");
+            b.Property<DateTimeOffset>("NextAttemptAt").HasColumnType("timestamp with time zone");
+            b.Property<string>("Payload").HasColumnType("text");
+            b.Property<int>("Status").HasColumnType("integer");
+            b.Property<string>("StoreId").HasColumnType("text");
+            b.Property<string>("Url").HasColumnType("text");
+
+            b.HasKey("Id");
+            b.HasIndex("Status", "NextAttemptAt");
+            b.HasIndex("InvoiceId", "EventType");
+
+            b.ToTable("GrinWebhookDeliveries", "BTCPayServer.Plugins.Grin");
         });
 
         modelBuilder.Entity("BTCPayServer.Plugins.Grin.Data.GrinStoreSettings", b =>

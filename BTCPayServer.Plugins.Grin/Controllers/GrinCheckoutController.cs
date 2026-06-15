@@ -18,6 +18,7 @@ namespace BTCPayServer.Plugins.Grin.Controllers;
 public class GrinCheckoutController : Controller
 {
     private readonly GrinService _grinService;
+    private readonly GrinWebhookDeliveryService _deliveryService;
     private readonly GrinRPCProvider _rpcProvider;
     // Cached + health-tracked rate provider. NEVER inject GrinRateProvider
     // here directly — that bypasses caching and pays a synchronous
@@ -25,10 +26,13 @@ public class GrinCheckoutController : Controller
     private readonly GrinRateHealth _rateProvider;
     private readonly ILogger<GrinCheckoutController> _logger;
 
-    public GrinCheckoutController(GrinService grinService, GrinRPCProvider rpcProvider,
+    public GrinCheckoutController(GrinService grinService,
+        GrinWebhookDeliveryService deliveryService,
+        GrinRPCProvider rpcProvider,
         GrinRateHealth rateProvider, ILogger<GrinCheckoutController> logger)
     {
         _grinService = grinService;
+        _deliveryService = deliveryService;
         _rpcProvider = rpcProvider;
         _rateProvider = rateProvider;
         _logger = logger;
@@ -307,29 +311,26 @@ public class GrinCheckoutController : Controller
             await _grinService.UpdateInvoiceStatus(invoiceId, GrinInvoiceStatus.Broadcast);
             _logger.LogInformation("Grin invoice {InvoiceId} finalized and broadcast", invoiceId);
 
-            // Dispatch webhook: payment detected (broadcast to network).
-            // This triggers "authorized" in Medusa, creating the order
-            // immediately so the customer sees a confirmation page even
-            // before the chain confirms. `await` matters — pre-2026-06-15
-            // this call was fire-and-forget, which under any contention
-            // could drop the broadcast event entirely (the controller
-            // returned the redirect to the customer before the POST left
-            // the box). Now the request waits for the dispatch to either
-            // succeed (logged at info inside DispatchWebhook) or fail
-            // (caught + logged here). Customer wait is bounded by the
-            // RpcTimeout in GrinRPCClient (15s) so this won't hang the
-            // redirect indefinitely.
+            // Enqueue the "payment detected" broadcast webhook so Medusa
+            // can transition the cart to "authorized" + create the order
+            // record before chain confirmation arrives. Enqueueing
+            // returns immediately; the worker
+            // (GrinWebhookDeliveryWorker) picks it up within ~5s and
+            // delivers with the same backoff retry policy that protects
+            // the settlement webhook. Pre-2026-06-15 this was a
+            // fire-and-forget HTTP POST that could lose the broadcast
+            // event entirely on contention.
             try
             {
                 var updatedInvoice = await _grinService.GetInvoice(invoiceId);
                 if (updatedInvoice != null)
                 {
-                    await _grinService.DispatchWebhook(settings, updatedInvoice, "InvoiceProcessing");
+                    await _deliveryService.EnqueueDelivery(updatedInvoice, settings, "InvoiceProcessing");
                 }
             }
-            catch (Exception webhookEx)
+            catch (Exception enqEx)
             {
-                _logger.LogWarning(webhookEx, "Failed to dispatch broadcast webhook for invoice {InvoiceId}", invoiceId);
+                _logger.LogWarning(enqEx, "Failed to enqueue broadcast webhook for invoice {InvoiceId}", invoiceId);
             }
 
             return RedirectToAction(nameof(Checkout), new { storeId, invoiceId });
@@ -405,29 +406,25 @@ public class GrinCheckoutController : Controller
                                     // gets rows-affected=1 and owns the dispatch.
                                     // Losers see false and skip silently.
                                     //
-                                    // If our dispatch returns non-2xx or throws, revert
-                                    // the guard so the monitor's RetryUnsignaledSettlements
-                                    // loop can take another shot. Becomes obsolete once
-                                    // B3 (persistent retry queue) lands; until then this
-                                    // is the simplest safety net against transient
-                                    // Medusa-side failures.
+                                    // Once the guard is held, we enqueue a delivery row;
+                                    // GrinWebhookDeliveryWorker takes it from there
+                                    // (retries on its own exponential backoff schedule
+                                    // up to ~32h before dead-lettering). The handler
+                                    // is therefore at-most-once-per-confirmation but
+                                    // at-least-once-delivered-from-the-queue, which is
+                                    // exactly what we want.
                                     if (await _grinService.TryMarkSettlementWebhookSent(invoiceId))
                                     {
-                                        bool delivered;
                                         try
                                         {
-                                            delivered = await _grinService.DispatchWebhook(
-                                                settings, invoice, "InvoicePaymentSettled");
+                                            await _deliveryService.EnqueueDelivery(
+                                                invoice, settings, "InvoicePaymentSettled");
                                         }
-                                        catch (Exception webhookEx)
+                                        catch (Exception enqEx)
                                         {
-                                            _logger.LogWarning(webhookEx,
-                                                "Failed to dispatch InvoicePaymentSettled from Status endpoint for invoice {InvoiceId}",
+                                            _logger.LogError(enqEx,
+                                                "Failed to enqueue InvoicePaymentSettled for invoice {InvoiceId} — reverting guard so the monitor can retry",
                                                 invoiceId);
-                                            delivered = false;
-                                        }
-                                        if (!delivered)
-                                        {
                                             await _grinService.ResetSettlementWebhookFlag(invoiceId);
                                         }
                                     }

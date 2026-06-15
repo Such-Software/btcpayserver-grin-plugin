@@ -29,8 +29,10 @@ public class Plugin : BaseBTCPayServerPlugin
         services.AddSingleton<IUIExtension>(new UIExtension("GrinNav", "store-wallets-nav"));
         services.AddHostedService<PluginMigrationRunner>();
         services.AddHostedService<GrinPaymentMonitorService>();
+        services.AddHostedService<GrinWebhookDeliveryWorker>();
         services.AddSingleton<GrinRPCProvider>();
         services.AddSingleton<GrinService>();
+        services.AddSingleton<GrinWebhookDeliveryService>();
         services.AddSingleton<GrinSyncService>();
         services.AddHostedService(sp => sp.GetRequiredService<GrinSyncService>());
         services.AddSingleton<ISyncSummaryProvider, GrinSyncSummaryProvider>();

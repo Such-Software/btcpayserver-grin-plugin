@@ -255,74 +255,11 @@ public class GrinService
             .ToListAsync();
     }
 
-    /// <summary>
-    /// Dispatch a webhook for a Grin invoice status change.
-    /// Same BTCPay-compat format as GrinPaymentMonitorService uses.
-    /// Returns <c>true</c> on HTTP 2xx, <c>false</c> on network
-    /// failure or non-2xx response. Returns <c>true</c> when the
-    /// store has no <c>WebhookUrl</c> configured (nothing to deliver,
-    /// equivalent to success from the caller's perspective so the
-    /// settlement guard stays set).
-    /// </summary>
-    public async Task<bool> DispatchWebhook(GrinStoreSettings settings, GrinInvoice invoice, string eventType)
-    {
-        if (string.IsNullOrEmpty(settings.WebhookUrl))
-            return true;
-
-        try
-        {
-            var payload = new
-            {
-                @event = eventType,
-                invoiceId = invoice.Id,
-                storeId = invoice.StoreId,
-                invoice = new
-                {
-                    id = invoice.Id,
-                    status = invoice.Status.ToString(),
-                    amount = invoice.AmountNanogrin / 1_000_000_000m,
-                    confirmations = invoice.Confirmations,
-                    metadata = new
-                    {
-                        session_id = invoice.SessionId ?? "",
-                        order_id = invoice.OrderId ?? "",
-                    },
-                },
-            };
-
-            var json = System.Text.Json.JsonSerializer.Serialize(payload);
-            var body = System.Text.Encoding.UTF8.GetBytes(json);
-
-            // HMAC-SHA256 signature — shared helper keeps this path and
-            // GrinPaymentMonitorService.DispatchWebhookAsync in lockstep.
-            // Helper returns "" when no secret configured; in that case
-            // we skip the header entirely rather than emit a bogus
-            // "sha256=" with no value (which Medusa would reject as
-            // malformed).
-            var sig = WebhookSignature.Compute(settings.WebhookSecret, body);
-
-            var httpClient = _httpClientFactory.CreateClient();
-            var request = new HttpRequestMessage(HttpMethod.Post, settings.WebhookUrl)
-            {
-                Content = new ByteArrayContent(body)
-            };
-            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-            if (!string.IsNullOrEmpty(sig))
-            {
-                request.Headers.Add("btcpay-sig", sig);
-            }
-            request.Headers.Add("User-Agent", "btcpayserver-grin-plugin/1.0");
-
-            var response = await httpClient.SendAsync(request);
-            _logger.LogInformation(
-                "Webhook dispatched for invoice {InvoiceId}: {EventType} → {StatusCode}",
-                invoice.Id, eventType, (int)response.StatusCode);
-            return response.IsSuccessStatusCode;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to dispatch webhook for invoice {InvoiceId}", invoice.Id);
-            return false;
-        }
-    }
+    // The inline DispatchWebhook helper that lived here pre-2026-06-15
+    // (B3) has retired. Webhook delivery is now owned end-to-end by
+    // GrinWebhookDeliveryService + GrinWebhookDeliveryWorker: a single
+    // dispatch code path, persistent queue, exponential-backoff retry,
+    // dead-letter on exhaustion. Callers that used to invoke
+    // DispatchWebhook now call _deliveryService.EnqueueDelivery and
+    // the worker handles the rest.
 }
