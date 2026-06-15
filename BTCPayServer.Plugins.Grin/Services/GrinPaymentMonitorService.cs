@@ -50,12 +50,65 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
         try
         {
             await CheckBroadcastInvoices();
+            await RetryUnsignaledSettlements();
             await CheckForReorgs();
             await ExpireStaleInvoices();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Grin payment monitor error");
+        }
+    }
+
+    /// <summary>
+    /// Catches invoices that landed in Confirmed state but whose
+    /// settlement webhook never made it out the door — either because
+    /// the dispatcher returned non-2xx and the caller reverted the
+    /// guard, or because this migration is freshly applied and there
+    /// are pre-existing Confirmed rows from before the guard column
+    /// existed (those default to false and look unsignaled).
+    ///
+    /// Each tick attempts the atomic mark + dispatch + revert-on-fail
+    /// sequence. Until B3 (persistent retry queue + exponential
+    /// backoff) lands, this is a best-effort tick-based retry — every
+    /// monitor cycle (30s) we'll try one more time. A persistent
+    /// Medusa-side outage will still drop the eventual delivery; the
+    /// recovery path is the same operator SQL update used on
+    /// 2026-06-15 for the 3 historical stuck orders, but at least the
+    /// monitor now stops re-trying once Medusa comes back.
+    /// </summary>
+    private async Task RetryUnsignaledSettlements()
+    {
+        var unsignaled = await _grinService.GetUnsignaledSettlements();
+        foreach (var invoice in unsignaled)
+        {
+            try
+            {
+                var settings = await _grinService.GetStoreSettings(invoice.StoreId);
+                if (settings == null || !settings.Enabled) continue;
+
+                if (await _grinService.TryMarkSettlementWebhookSent(invoice.Id))
+                {
+                    var delivered = await DispatchWebhookAsync(
+                        invoice, settings, "InvoicePaymentSettled");
+                    if (!delivered)
+                    {
+                        await _grinService.ResetSettlementWebhookFlag(invoice.Id);
+                    }
+                    else
+                    {
+                        _logger.LogInformation(
+                            "Settlement webhook retry succeeded for invoice {InvoiceId}",
+                            invoice.Id);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to retry settlement webhook for invoice {InvoiceId}",
+                    invoice.Id);
+            }
         }
     }
 
@@ -192,8 +245,21 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
                             "Invoice {InvoiceId} confirmed with {Confirmations} confirmations",
                             invoice.Id, confirmations);
 
-                        // Dispatch webhook to Medusa so order gets created
-                        await DispatchWebhookAsync(invoice, settings, "InvoicePaymentSettled");
+                        // Atomic guard against the customer-side /status poll
+                        // (5s) racing this tick (30s) and dispatching the same
+                        // settlement twice. See GrinService.TryMarkSettlementWebhookSent.
+                        if (await _grinService.TryMarkSettlementWebhookSent(invoice.Id))
+                        {
+                            invoice.Status = GrinInvoiceStatus.Confirmed;
+                            var delivered = await DispatchWebhookAsync(
+                                invoice, settings, "InvoicePaymentSettled");
+                            if (!delivered)
+                            {
+                                // Revert so the next tick's
+                                // RetryUnsignaledSettlements loop tries again.
+                                await _grinService.ResetSettlementWebhookFlag(invoice.Id);
+                            }
+                        }
                     }
                     else if (confirmations > invoice.Confirmations)
                     {
@@ -253,11 +319,15 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
     /// <summary>
     /// Send webhook to Medusa backend so payment status is updated and order is created.
     /// Uses the same BTCPay-compat event format that our crypto checkout providers expect.
+    /// Returns <c>true</c> on HTTP 2xx, <c>false</c> on network failure or non-2xx.
+    /// Returns <c>true</c> when no <c>WebhookUrl</c> is configured (nothing to deliver,
+    /// equivalent to success from the caller's perspective so the settlement
+    /// guard stays set rather than churning on every monitor tick).
     /// </summary>
-    private async Task DispatchWebhookAsync(GrinInvoice invoice, GrinStoreSettings settings, string eventType)
+    private async Task<bool> DispatchWebhookAsync(GrinInvoice invoice, GrinStoreSettings settings, string eventType)
     {
         if (string.IsNullOrEmpty(settings.WebhookUrl))
-            return;
+            return true;
 
         try
         {
@@ -300,10 +370,12 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
             _logger.LogInformation(
                 "Webhook dispatched for invoice {InvoiceId}: {EventType} → {Url} (status {StatusCode})",
                 invoice.Id, eventType, settings.WebhookUrl, (int)response.StatusCode);
+            return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to dispatch webhook for invoice {InvoiceId}", invoice.Id);
+            return false;
         }
     }
 

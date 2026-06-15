@@ -20,6 +20,20 @@ public class GrinInvoice
     public string SessionId { get; set; }       // Medusa payment session ID
     public string OrderId { get; set; }          // Medusa cart/order reference
     public string RedirectUrl { get; set; }      // Post-payment redirect URL
+
+    /// <summary>
+    /// True once an <c>InvoicePaymentSettled</c> webhook has been
+    /// successfully dispatched for this invoice's current
+    /// confirmation. Acts as the cross-process / cross-call atomic
+    /// guard so the customer-side /status poll and the background
+    /// <c>GrinPaymentMonitorService</c> can't both fire the settlement
+    /// webhook on the same confirmation event.
+    ///
+    /// Reset to <c>false</c> when the invoice transitions back to
+    /// <c>Broadcast</c> via a reorg detection so the re-confirmation
+    /// fires a fresh notification.
+    /// </summary>
+    public bool SettlementWebhookSent { get; set; }
 }
 
 public enum GrinInvoiceStatus

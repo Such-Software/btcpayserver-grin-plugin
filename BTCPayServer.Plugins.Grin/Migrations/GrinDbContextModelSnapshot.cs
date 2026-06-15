@@ -27,6 +27,7 @@ partial class GrinDbContextModelSnapshot : ModelSnapshot
             b.Property<DateTimeOffset?>("PaidAt").HasColumnType("timestamp with time zone");
             b.Property<string>("RedirectUrl").HasColumnType("text");
             b.Property<string>("SessionId").HasColumnType("text");
+            b.Property<bool>("SettlementWebhookSent").HasColumnType("boolean");
             b.Property<string>("SlatepackAddress").HasColumnType("text");
             b.Property<int>("Status").HasColumnType("integer");
             b.Property<string>("StoreId").HasColumnType("text");

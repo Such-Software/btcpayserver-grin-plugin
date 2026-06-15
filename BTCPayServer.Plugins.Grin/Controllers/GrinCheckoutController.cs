@@ -391,39 +391,32 @@ public class GrinCheckoutController : Controller
 
                                 if (confirmations >= settings.MinConfirmations)
                                 {
-                                    // Snapshot prior status BEFORE the transition so
-                                    // we can detect whether THIS caller is the one
-                                    // promoting the invoice to Confirmed. Customer-
-                                    // side /status polls every 5s; background monitor
-                                    // every 30s. Both end up here on a freshly-
-                                    // confirmed invoice. Whoever wins dispatches the
-                                    // InvoicePaymentSettled webhook.
-                                    var wasBroadcast = invoice.Status == GrinInvoiceStatus.Broadcast;
-
                                     await _grinService.UpdateInvoiceStatus(invoiceId,
                                         GrinInvoiceStatus.Confirmed, confirmations);
                                     invoice.Status = GrinInvoiceStatus.Confirmed;
                                     invoice.Confirmations = confirmations;
 
-                                    // Pre-2026-06-15 the settlement webhook only fired
-                                    // from GrinPaymentMonitorService.CheckBroadcastInvoices.
-                                    // The monitor's loop guard
-                                    // (`if (invoice.Status != Broadcast) continue;`)
-                                    // means once ANY caller flips to Confirmed the
-                                    // monitor never re-examines the row. If the
-                                    // browser /status poll won the race, the webhook
-                                    // never fired and the merchant order sat in
-                                    // 'authorized' forever — that's how 3 staging
-                                    // Grin orders got stuck (recovered via SQL
-                                    // 2026-06-15). This branch closes that race for
-                                    // the common case; full transactional
-                                    // idempotency lock is TODO B4 (add
-                                    // SettlementWebhookSent column + atomic guard).
-                                    if (wasBroadcast)
+                                    // Settlement-dispatch race: customer-side /status
+                                    // poll fires every 5s, background monitor every
+                                    // 30s. Both reach this branch on a freshly-confirmed
+                                    // invoice. TryMarkSettlementWebhookSent is an atomic
+                                    // UPDATE on a guard column — Postgres row-locks the
+                                    // row at statement scope, so exactly one caller
+                                    // gets rows-affected=1 and owns the dispatch.
+                                    // Losers see false and skip silently.
+                                    //
+                                    // If our dispatch returns non-2xx or throws, revert
+                                    // the guard so the monitor's RetryUnsignaledSettlements
+                                    // loop can take another shot. Becomes obsolete once
+                                    // B3 (persistent retry queue) lands; until then this
+                                    // is the simplest safety net against transient
+                                    // Medusa-side failures.
+                                    if (await _grinService.TryMarkSettlementWebhookSent(invoiceId))
                                     {
+                                        bool delivered;
                                         try
                                         {
-                                            await _grinService.DispatchWebhook(
+                                            delivered = await _grinService.DispatchWebhook(
                                                 settings, invoice, "InvoicePaymentSettled");
                                         }
                                         catch (Exception webhookEx)
@@ -431,6 +424,11 @@ public class GrinCheckoutController : Controller
                                             _logger.LogWarning(webhookEx,
                                                 "Failed to dispatch InvoicePaymentSettled from Status endpoint for invoice {InvoiceId}",
                                                 invoiceId);
+                                            delivered = false;
+                                        }
+                                        if (!delivered)
+                                        {
+                                            await _grinService.ResetSettlementWebhookFlag(invoiceId);
                                         }
                                     }
                                 }

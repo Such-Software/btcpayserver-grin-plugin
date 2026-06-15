@@ -189,18 +189,85 @@ public class GrinService
         invoice.Confirmations = confirmations;
         if (status == GrinInvoiceStatus.Confirmed)
             invoice.PaidAt = DateTimeOffset.UtcNow;
+        // Reset the settlement-dispatch guard whenever the invoice
+        // transitions BACK to Broadcast (reorg). The fresh
+        // confirmation that eventually follows must fire a new
+        // notification. For non-reorg paths this is a no-op: a
+        // freshly-created invoice already has SettlementWebhookSent=
+        // false.
+        if (status == GrinInvoiceStatus.Broadcast)
+            invoice.SettlementWebhookSent = false;
 
         await ctx.SaveChangesAsync();
     }
 
     /// <summary>
+    /// Atomically claim the right to dispatch the
+    /// <c>InvoicePaymentSettled</c> webhook for an invoice. Returns
+    /// <c>true</c> exactly once across all concurrent callers; subsequent
+    /// (or losing) callers get <c>false</c>.
+    ///
+    /// Implementation is a single UPDATE...WHERE...AND
+    /// SettlementWebhookSent=false. PostgreSQL row-locks the row at
+    /// statement scope, so even when the Status endpoint (5s poll) and
+    /// the monitor service (30s loop) land in the same millisecond,
+    /// only one's affected-row count is 1.
+    /// </summary>
+    public async Task<bool> TryMarkSettlementWebhookSent(string invoiceId)
+    {
+        await using var ctx = _dbContextFactory.CreateContext();
+        var rows = await ctx.GrinInvoices
+            .Where(i => i.Id == invoiceId && !i.SettlementWebhookSent)
+            .ExecuteUpdateAsync(s =>
+                s.SetProperty(i => i.SettlementWebhookSent, true));
+        return rows == 1;
+    }
+
+    /// <summary>
+    /// Revert the SettlementWebhookSent flag so subsequent calls
+    /// (or the monitor's retry-unsignaled loop) can attempt dispatch
+    /// again. Used when a TryMark succeeded but the actual webhook
+    /// dispatch returned non-2xx and we want the chance to retry.
+    /// Becomes obsolete once B3 (persistent webhook delivery queue +
+    /// retry worker) lands; for now this is the simplest safety net.
+    /// </summary>
+    public async Task ResetSettlementWebhookFlag(string invoiceId)
+    {
+        await using var ctx = _dbContextFactory.CreateContext();
+        await ctx.GrinInvoices
+            .Where(i => i.Id == invoiceId)
+            .ExecuteUpdateAsync(s =>
+                s.SetProperty(i => i.SettlementWebhookSent, false));
+    }
+
+    /// <summary>
+    /// Confirmed invoices whose settlement webhook has not yet been
+    /// dispatched. The monitor's tick uses this to retry settlement
+    /// notifications that lost a race or whose initial dispatch
+    /// returned non-2xx and reverted the flag.
+    /// </summary>
+    public async Task<List<GrinInvoice>> GetUnsignaledSettlements()
+    {
+        await using var ctx = _dbContextFactory.CreateContext();
+        return await ctx.GrinInvoices
+            .Where(i => i.Status == GrinInvoiceStatus.Confirmed
+                        && !i.SettlementWebhookSent)
+            .ToListAsync();
+    }
+
+    /// <summary>
     /// Dispatch a webhook for a Grin invoice status change.
     /// Same BTCPay-compat format as GrinPaymentMonitorService uses.
+    /// Returns <c>true</c> on HTTP 2xx, <c>false</c> on network
+    /// failure or non-2xx response. Returns <c>true</c> when the
+    /// store has no <c>WebhookUrl</c> configured (nothing to deliver,
+    /// equivalent to success from the caller's perspective so the
+    /// settlement guard stays set).
     /// </summary>
-    public async Task DispatchWebhook(GrinStoreSettings settings, GrinInvoice invoice, string eventType)
+    public async Task<bool> DispatchWebhook(GrinStoreSettings settings, GrinInvoice invoice, string eventType)
     {
         if (string.IsNullOrEmpty(settings.WebhookUrl))
-            return;
+            return true;
 
         try
         {
@@ -250,10 +317,12 @@ public class GrinService
             _logger.LogInformation(
                 "Webhook dispatched for invoice {InvoiceId}: {EventType} → {StatusCode}",
                 invoice.Id, eventType, (int)response.StatusCode);
+            return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to dispatch webhook for invoice {InvoiceId}", invoice.Id);
+            return false;
         }
     }
 }
