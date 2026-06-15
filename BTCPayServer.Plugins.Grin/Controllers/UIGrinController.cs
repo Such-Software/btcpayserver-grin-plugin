@@ -6,6 +6,7 @@ using BTCPayServer.Plugins.Grin.Data;
 using BTCPayServer.Plugins.Grin.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Plugins.Grin;
 
@@ -16,15 +17,18 @@ public class UIGrinController : Controller
     private readonly GrinService _grinService;
     private readonly GrinRPCProvider _rpcProvider;
     private readonly GrinRateHealth _rateHealth;
+    private readonly ILogger<UIGrinController> _logger;
 
     public UIGrinController(
         GrinService grinService,
         GrinRPCProvider rpcProvider,
-        GrinRateHealth rateHealth)
+        GrinRateHealth rateHealth,
+        ILogger<UIGrinController> logger)
     {
         _grinService = grinService;
         _rpcProvider = rpcProvider;
         _rateHealth = rateHealth;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -125,6 +129,33 @@ public class UIGrinController : Controller
     public async Task<IActionResult> Settings(string storeId, GrinStoreSettings settings)
     {
         settings.StoreId = storeId;
+
+        // SSRF guard on operator-editable URL fields. OwnerApiUrl +
+        // NodeApiUrl legitimately point at the same docker network as
+        // BTCPay (the grin-wallet RPC container), so we allow private
+        // ranges with a warning rather than hard-rejecting. The strict
+        // rejects are: bad scheme, embedded credentials, IMDS hosts.
+        // See UrlSafetyValidator for the full ruleset.
+        var ownerCheck = UrlSafetyValidator.Validate(settings.OwnerApiUrl, "Wallet owner API URL");
+        var nodeCheck = UrlSafetyValidator.Validate(settings.NodeApiUrl, "Node API URL", allowEmpty: true);
+        var webhookCheck = UrlSafetyValidator.Validate(settings.WebhookUrl, "Webhook URL", allowEmpty: true);
+        var errors = new System.Collections.Generic.List<string>();
+        errors.AddRange(ownerCheck.Errors);
+        errors.AddRange(nodeCheck.Errors);
+        errors.AddRange(webhookCheck.Errors);
+        if (errors.Count > 0)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = string.Join(" ", errors);
+            ViewBag.Invoices = await _grinService.GetInvoicesByStore(storeId);
+            ViewBag.Balance = await TryGetWalletBalance(settings);
+            ViewBag.RateHealth = _rateHealth.GetStatus();
+            return View(settings);
+        }
+        // Warnings don't block save but get logged for operator visibility.
+        foreach (var w in ownerCheck.Warnings) _logger.LogWarning("Grin store {StoreId} settings warning: {Warning}", storeId, w);
+        foreach (var w in nodeCheck.Warnings) _logger.LogWarning("Grin store {StoreId} settings warning: {Warning}", storeId, w);
+        foreach (var w in webhookCheck.Warnings) _logger.LogWarning("Grin store {StoreId} settings warning: {Warning}", storeId, w);
+
         _rpcProvider.InvalidateClient(storeId);
         await _grinService.SaveStoreSettings(settings);
         TempData[WellKnownTempData.SuccessMessage] = "Grin settings updated.";

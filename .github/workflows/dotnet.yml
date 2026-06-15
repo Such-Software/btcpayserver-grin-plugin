@@ -1,0 +1,67 @@
+name: build + test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Manual fire-button for re-running off a release tag etc.
+  workflow_dispatch:
+
+# Cancel an in-flight run when a newer commit lands on the same branch
+# / PR — saves runner minutes on a rapid push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          # btcpayserver/ is a git submodule pinned at the BTCPay
+          # release this plugin builds against. The plugin's
+          # ProjectReference at csproj resolves into that submodule,
+          # so without --recursive the build fails on missing csproj.
+          submodules: recursive
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          # Track Plugin.csproj's TargetFramework. Bumping the SDK
+          # here needs a matching <TargetFramework> bump (and a
+          # btcpayserver submodule that targets the same).
+          dotnet-version: '10.0.x'
+
+      - name: NuGet package cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        # Restoring the test csproj transitively restores the plugin
+        # csproj it references. No top-level .sln in this repo (the
+        # btcpayserver submodule has its own one we don't touch).
+        run: dotnet restore BTCPayServer.Plugins.Grin.Tests/BTCPayServer.Plugins.Grin.Tests.csproj
+
+      - name: Build (Release)
+        # Match the configuration the operator ships — Release mode
+        # excludes the Microsoft.EntityFrameworkCore.Design package
+        # (per the csproj's Condition), so this is what really runs
+        # on a BTCPay node. Building the test csproj transitively
+        # builds the plugin (it has a ProjectReference). Warnings
+        # stay non-fatal because BTCPay itself emits CS0618 obsolete
+        # warnings we can't fix from this side.
+        run: dotnet build BTCPayServer.Plugins.Grin.Tests/BTCPayServer.Plugins.Grin.Tests.csproj -c Release --no-restore
+
+      - name: Test
+        # Pin to the .Tests csproj specifically — the btcpayserver
+        # submodule contains its OWN BTCPayServer.Tests which would
+        # otherwise also get discovered and which we do not maintain.
+        run: dotnet test BTCPayServer.Plugins.Grin.Tests/BTCPayServer.Plugins.Grin.Tests.csproj -c Release --no-build --verbosity normal

@@ -13,6 +13,22 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <!-- The main plugin csproj only references these packages in
+         non-Release builds (BTCPay supplies them at runtime when the
+         plugin loads into its process). The test runner isn't BTCPay,
+         so we need to provide them ourselves regardless of config —
+         otherwise EncryptedColumnConverterTests (which exercise the
+         EFCore ValueConverter directly) throws FileNotFoundException
+         on `Microsoft.EntityFrameworkCore`. Versions must track the
+         conditional refs in the main csproj. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.6" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.6" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
+    <!-- EFCore.Design 10.0.6 transitively requires CodeAnalysis 5.0.0
+         but BTCPayServer.Rating wants 5.3.0; pin to 5.3.0 to match
+         the main plugin csproj. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.Common" Version="5.3.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
   </ItemGroup>
 
   <ItemGroup>
