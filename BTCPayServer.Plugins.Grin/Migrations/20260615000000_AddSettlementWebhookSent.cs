@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -22,6 +24,8 @@ namespace BTCPayServer.Plugins.Grin.Migrations
     /// closes the historical exposure to the same race that the 3
     /// stuck staging Grin orders hit on 2026-06-15.
     /// </summary>
+    [DbContext(typeof(GrinDbContext))]
+    [Migration("20260615000000_AddSettlementWebhookSent")]
     public partial class AddSettlementWebhookSent : Migration
     {
         protected override void Up(MigrationBuilder migrationBuilder)
