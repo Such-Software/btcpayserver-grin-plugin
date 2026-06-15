@@ -1,9 +1,15 @@
 using System;
 using System.Threading.Tasks;
 using BTCPayServer.Abstractions.Constants;
+using BTCPayServer.Abstractions.Extensions;
 using BTCPayServer.Client;
+using BTCPayServer.Data;
+using BTCPayServer.Payments;
 using BTCPayServer.Plugins.Grin.Data;
+using BTCPayServer.Plugins.Grin.Payments;
 using BTCPayServer.Plugins.Grin.Services;
+using BTCPayServer.Services.Invoices;
+using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -17,17 +23,23 @@ public class UIGrinController : Controller
     private readonly GrinService _grinService;
     private readonly GrinRPCProvider _rpcProvider;
     private readonly GrinRateHealth _rateHealth;
+    private readonly StoreRepository _storeRepo;
+    private readonly PaymentMethodHandlerDictionary _handlers;
     private readonly ILogger<UIGrinController> _logger;
 
     public UIGrinController(
         GrinService grinService,
         GrinRPCProvider rpcProvider,
         GrinRateHealth rateHealth,
+        StoreRepository storeRepo,
+        PaymentMethodHandlerDictionary handlers,
         ILogger<UIGrinController> logger)
     {
         _grinService = grinService;
         _rpcProvider = rpcProvider;
         _rateHealth = rateHealth;
+        _storeRepo = storeRepo;
+        _handlers = handlers;
         _logger = logger;
     }
 
@@ -158,6 +170,27 @@ public class UIGrinController : Controller
 
         _rpcProvider.InvalidateClient(storeId);
         await _grinService.SaveStoreSettings(settings);
+
+        // Mirror the operator's Enabled toggle into BTCPay's
+        // store-payment-method config so Grin appears in the store
+        // settings' Payment Methods page and BTCPay's invoice flow
+        // can pick it up automatically. Same pattern Bitcoin /
+        // Lightning use — when the wallet is configured, the
+        // payment method auto-enables.
+        var store = HttpContext.GetStoreData();
+        if (store != null && _handlers.TryGetValue(GrinPaymentMethodConstants.PaymentMethodId, out var handler))
+        {
+            if (settings.Enabled)
+            {
+                store.SetPaymentMethodConfig(handler, new GrinPaymentMethodConfig { Enabled = true });
+            }
+            else
+            {
+                store.SetPaymentMethodConfig(handler, null);
+            }
+            await _storeRepo.UpdateStore(store);
+        }
+
         TempData[WellKnownTempData.SuccessMessage] = "Grin settings updated.";
         return RedirectToAction(nameof(Settings), new { storeId });
     }

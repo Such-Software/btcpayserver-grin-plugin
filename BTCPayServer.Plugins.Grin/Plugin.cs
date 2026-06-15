@@ -85,14 +85,24 @@ public class Plugin : BaseBTCPayServerPlugin
         });
 
         // P1: register Grin as a first-class BTCPay payment method.
-        // BTCPay's invoice creation flow can now dispatch into
+        // BTCPay's invoice creation flow dispatches into
         // GrinPaymentMethodHandler.ConfigurePrompt, the store settings
-        // page will list Grin as a selectable payment method, and the
-        // Greenfield API will return Grin prompts on its invoice
-        // endpoints. Phase B (payment-back bridge from monitor to
-        // PaymentService.AddPayment) is still deferred — see comment
-        // on GrinPaymentMethodHandler.
+        // page lists Grin as a selectable payment method, and the
+        // Greenfield API returns Grin prompts on its invoice endpoints.
+        // Settled payments flow back through PaymentService.AddPayment
+        // (see GrinSettlementDispatcher).
         services.AddSingleton<IPaymentMethodHandler, GrinPaymentMethodHandler>();
         services.AddSingleton<IPaymentLinkExtension, GrinPaymentLinkExtension>();
+
+        // Default rate rule for GRIN. Without this, BTCPay's rate
+        // engine falls back to `X_X = kraken(X_X)` which fails for
+        // Grin (no Kraken listing) and the GRIN-CHAIN payment method
+        // gets auto-disabled on invoice creation. The rule below
+        // says "for any GRIN/<X> pair, ask the gringateio provider"
+        // — that provider is our GrinRateProvider via Gate.io, the
+        // only sizable centralized exchange that carries GRIN.
+        // Operators can override per-store via Store Settings → Rates.
+        services.AddSingleton<BTCPayServer.DefaultRules>(
+            new BTCPayServer.DefaultRules("GRIN_X = gringateio(GRIN_X);"));
     }
 }
