@@ -3,9 +3,12 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using BTCPayServer.Abstractions.Constants;
+using BTCPayServer.Client;
 using BTCPayServer.Plugins.Grin.Data;
 using BTCPayServer.Plugins.Grin.Services;
 using BTCPayServer.Rating;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
@@ -35,6 +38,13 @@ public class GrinCheckoutController : Controller
     /// Creates a new Grin payment invoice. Called by the store's e-commerce integration.
     /// POST /stores/{storeId}/plugins/grin/invoices
     /// Body: { "amount": 1.5, "orderId": "order-123", "redirectUrl": "https://..." }
+    ///
+    /// Authentication: BTCPay Greenfield API key with `btcpay.store.cancreateinvoice`
+    /// scope, passed as `Authorization: token &lt;api-key&gt;`. Matches the convention
+    /// of every other invoice-creating endpoint in BTCPay
+    /// (see GreenfieldInvoiceController.CreateInvoice). Operator provisions
+    /// the key per-store in BTCPay → Settings → Account → API Keys and the
+    /// integration (e.g. Medusa) pastes it into its provider config.
     /// </summary>
     // External API endpoint — called from e-commerce integrations
     // (Medusa, custom storefronts) without a BTCPay session/cookie.
@@ -44,6 +54,8 @@ public class GrinCheckoutController : Controller
     // the rest of the controller (slatepack-submit form etc.) still
     // gets antiforgery via the global filter where it makes sense.
     [HttpPost("invoices")]
+    [Authorize(Policy = Policies.CanCreateInvoice,
+        AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
     [Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryToken]
     public async Task<IActionResult> CreateInvoice(string storeId, [FromBody] CreateGrinInvoiceRequest request)
     {
