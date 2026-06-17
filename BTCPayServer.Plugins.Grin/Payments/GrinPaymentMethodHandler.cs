@@ -147,9 +147,7 @@ public class GrinPaymentMethodHandler : IPaymentMethodHandler
 
         // Populate the BTCPay-side prompt. Destination is the
         // customer-visible address; Details is the slatepack message
-        // they actually copy/paste back to us. TrackedDestinations
-        // lets BTCPay's AddressInvoice machinery resolve
-        // "which invoice owns this slatepack address?".
+        // they actually copy/paste back to us.
         context.Prompt.Destination = slatepackAddress;
         context.Prompt.Details = JToken.FromObject(new GrinPaymentPromptDetails
         {
@@ -159,8 +157,19 @@ public class GrinPaymentMethodHandler : IPaymentMethodHandler
             GrinInvoiceId = grinInvoiceId,
             AmountNanogrin = amountNanogrin,
         }, Serializer);
-        if (!string.IsNullOrEmpty(slatepackAddress))
-            context.TrackedDestinations.Add(slatepackAddress);
+        // DO NOT add slatepackAddress to TrackedDestinations: every Grin
+        // invoice issued by the same wallet has the SAME slatepack
+        // address (the merchant's static address, not a fresh per-invoice
+        // address like BTC). BTCPay's AddressInvoice table is PK'd on
+        // the destination string, so adding it would succeed for the
+        // first invoice and throw a unique-constraint violation
+        // (PK_AddressInvoices) on every subsequent invoice — blocking
+        // all Grin invoice creation via Greenfield with a 500.
+        // We don't need address-based invoice resolution anyway:
+        // GrinPaymentMonitorService tracks confirmations by txSlateId
+        // and routes via GrinInvoice.BtcpayInvoiceId. txSlateId IS
+        // unique per invoice, so we still surface it as a search term
+        // so operators can find the BTCPay invoice from a tx_slate_id.
         context.AdditionalSearchTerms.Add(txSlateId);
     }
 
