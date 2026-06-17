@@ -106,11 +106,15 @@ public class GrinPaymentMethodHandler : IPaymentMethodHandler
         }
 
         var due = context.Prompt.Calculate().Due;
-        // PaymentPrompt amounts are in the base currency (GRIN); convert
-        // back to nanogrin for the wallet RPC. We round UP so a
-        // 0.000_000_001 rounding stub never undercharges; the wallet
-        // RPC takes integer nanogrin.
-        var amountNanogrin = (long)Math.Ceiling(due * 1_000_000_000m);
+        // PaymentPrompt amounts are in the base currency (GRIN). Round UP
+        // to TWO decimal places of GRIN before converting to nanogrin so
+        // customers can type a sane amount into their wallet (e.g. 41.07
+        // instead of 41.069352964). With GRIN/USD around $0.025, the
+        // largest rounding overcharge is ~$0.00025 — well within the
+        // noise of crypto rate movement and orders of magnitude smaller
+        // than what's saved by not making customers type nine decimals.
+        var grinAmount = Math.Ceiling(due * 100m) / 100m;
+        var amountNanogrin = (long)(grinAmount * 1_000_000_000m);
 
         var client = await _rpcProvider.GetClient(settings);
         var invoiceResult = await client.IssueInvoiceTx(amountNanogrin,
