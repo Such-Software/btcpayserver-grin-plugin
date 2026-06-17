@@ -246,9 +246,17 @@
             try {
                 new QRCode(el, {
                     text: slatepack.innerText.trim(),
-                    width: 200,
-                    height: 200,
-                    useSVG: true,
+                    // Slatepacks are typically 400-600 chars which puts the
+                    // QR at version 22-30. At 200×200 each module ends up
+                    // ~2 px and many phone scanners (especially GRIM, which
+                    // was the original failure mode that drove this page to
+                    // be replaced by the storefront's /grin-pay route) can't
+                    // resolve it. Bump to 400 and render as canvas (raster)
+                    // so the modules don't pick up SVG anti-aliasing — the
+                    // sharper edges scan cleanly.
+                    width: 400,
+                    height: 400,
+                    useSVG: false,
                     correctLevel: QRCode.CorrectLevel.L
                 });
             } catch(e) {
