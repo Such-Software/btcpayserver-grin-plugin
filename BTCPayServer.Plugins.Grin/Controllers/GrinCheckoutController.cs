@@ -159,6 +159,47 @@ public class GrinCheckoutController : Controller
     }
 
     /// <summary>
+    /// Fetch full Grin invoice details (slatepack address, message, amount,
+    /// status). JSON. Used by external storefronts that render their own
+    /// checkout UI (e.g. Medusa's /grin-pay route) instead of redirecting
+    /// the customer to the plugin-hosted Checkout view.
+    ///
+    /// Auth: same Greenfield API key required to create the invoice; we
+    /// reuse CanCreateInvoice rather than introducing a new scope (a
+    /// caller able to create the invoice in the first place is, by
+    /// definition, entitled to read its own state back).
+    ///
+    /// GET /stores/{storeId}/plugins/grin/invoices/{invoiceId}
+    /// </summary>
+    [HttpGet("invoices/{invoiceId}")]
+    [Authorize(Policy = Policies.CanCreateInvoice,
+        AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
+    public async Task<IActionResult> GetInvoice(string storeId, string invoiceId)
+    {
+        var invoice = await _grinService.GetInvoice(invoiceId);
+        if (invoice == null || invoice.StoreId != storeId)
+            return NotFound();
+
+        return Ok(new
+        {
+            invoiceId = invoice.Id,
+            storeId = invoice.StoreId,
+            status = invoice.Status.ToString(),
+            amountNanogrin = invoice.AmountNanogrin,
+            amountGrin = invoice.AmountNanogrin / 1_000_000_000m,
+            slatepackAddress = invoice.SlatepackAddress,
+            issuedSlatepack = invoice.IssuedSlatepack,
+            txSlateId = invoice.TxSlateId,
+            confirmations = invoice.Confirmations,
+            orderId = invoice.OrderId,
+            redirectUrl = invoice.RedirectUrl,
+            btcpayInvoiceId = invoice.BtcpayInvoiceId,
+            createdAt = invoice.CreatedAt,
+            paidAt = invoice.PaidAt,
+        });
+    }
+
+    /// <summary>
     /// Checkout page — shows slatepack address (Tor) and manual slatepack flow.
     /// GET /stores/{storeId}/plugins/grin/checkout/{invoiceId}
     /// </summary>
