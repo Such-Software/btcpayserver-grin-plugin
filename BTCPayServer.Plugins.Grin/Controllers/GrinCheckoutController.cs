@@ -200,6 +200,92 @@ public class GrinCheckoutController : Controller
     }
 
     /// <summary>
+    /// Accept the customer's response slatepack via JSON. Mirror of
+    /// the form-based SubmitSlatepack action below — same finalize +
+    /// broadcast pipeline — but returns JSON and authenticates via
+    /// the Greenfield API key (no anti-forgery cookie required).
+    ///
+    /// External storefronts (Medusa, etc.) that render their own
+    /// /grin-pay page need this so the customer can paste back the
+    /// response slatepack without bouncing to the plugin's hosted
+    /// checkout view mid-flow.
+    ///
+    /// POST /stores/{storeId}/plugins/grin/invoices/{invoiceId}/submit
+    /// Body: { "responseSlatepack": "BEGINSLATEPACK. ... ENDSLATEPACK." }
+    /// </summary>
+    [HttpPost("invoices/{invoiceId}/submit")]
+    [Authorize(Policy = Policies.CanCreateInvoice,
+        AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
+    [Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryToken]
+    public async Task<IActionResult> SubmitSlatepackJson(string storeId, string invoiceId,
+        [FromBody] SubmitSlatepackRequest req)
+    {
+        var invoice = await _grinService.GetInvoice(invoiceId);
+        if (invoice == null || invoice.StoreId != storeId)
+            return NotFound(new { error = "Invoice not found" });
+
+        if (invoice.Status == GrinInvoiceStatus.Broadcast || invoice.Status == GrinInvoiceStatus.Confirmed)
+            return Ok(new { status = invoice.Status.ToString(), message = "Already broadcast" });
+
+        if (invoice.Status == GrinInvoiceStatus.Expired)
+            return BadRequest(new { error = "Invoice expired" });
+
+        if (string.IsNullOrWhiteSpace(req?.ResponseSlatepack))
+            return BadRequest(new { error = "responseSlatepack is required" });
+
+        var settings = await _grinService.GetStoreSettings(storeId);
+        if (settings == null)
+            return StatusCode(500, new { error = "Grin not configured for this store" });
+
+        try
+        {
+            var client = await _rpcProvider.GetClient(settings);
+
+            var decodeResult = await client.DecodeSlatepack(req.ResponseSlatepack.Trim());
+            if (!decodeResult.TryGetProperty("Ok", out var decodedSlate))
+            {
+                _logger.LogWarning("DecodeSlatepack returned error: {Response}", decodeResult);
+                return BadRequest(new { error = "Invalid slatepack — could not decode. Check that you pasted the complete response from your wallet." });
+            }
+
+            var finalizeResult = await client.FinalizeTx(decodedSlate);
+            if (!finalizeResult.TryGetProperty("Ok", out var finalizedSlate))
+            {
+                _logger.LogWarning("FinalizeTx returned error: {Response}", finalizeResult);
+                return BadRequest(new { error = "Could not finalize — the slatepack may be for a different invoice or already used." });
+            }
+
+            var postResult = await client.PostTx(finalizedSlate, fluff: true);
+            if (!postResult.TryGetProperty("Ok", out _))
+            {
+                _logger.LogWarning("PostTx returned error: {Response}", postResult);
+                return StatusCode(502, new { error = "Failed to broadcast the transaction. Please try again." });
+            }
+
+            await _grinService.UpdateInvoiceStatus(invoiceId, GrinInvoiceStatus.Broadcast);
+            _logger.LogInformation("Grin invoice {InvoiceId} finalized and broadcast (JSON submit)", invoiceId);
+
+            try
+            {
+                var updatedInvoice = await _grinService.GetInvoice(invoiceId);
+                if (updatedInvoice != null)
+                    await _deliveryService.EnqueueDelivery(updatedInvoice, settings, "InvoiceProcessing");
+            }
+            catch (Exception enqEx)
+            {
+                _logger.LogWarning(enqEx, "Failed to enqueue broadcast webhook for invoice {InvoiceId}", invoiceId);
+            }
+
+            return Ok(new { status = "Broadcast", invoiceId });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to process slatepack for invoice {InvoiceId} (JSON submit)", invoiceId);
+            return StatusCode(500, new { error = "Unexpected error processing slatepack" });
+        }
+    }
+
+    /// <summary>
     /// Checkout page — shows slatepack address (Tor) and manual slatepack flow.
     /// GET /stores/{storeId}/plugins/grin/checkout/{invoiceId}
     /// </summary>
@@ -611,4 +697,14 @@ public class CreateGrinInvoiceRequest
     public string RedirectUrl { get; set; }
     public string SessionId { get; set; }
     public string Currency { get; set; }
+}
+
+public class SubmitSlatepackRequest
+{
+    /// <summary>
+    /// Customer's response slatepack — the BEGINSLATEPACK...ENDSLATEPACK
+    /// blob their wallet produced after processing the merchant's
+    /// invoice slate. The plugin decodes, finalizes, and broadcasts it.
+    /// </summary>
+    public string ResponseSlatepack { get; set; }
 }
