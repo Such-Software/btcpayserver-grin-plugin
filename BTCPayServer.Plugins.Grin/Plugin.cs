@@ -93,6 +93,11 @@ public class Plugin : BaseBTCPayServerPlugin
         // (see GrinSettlementDispatcher).
         services.AddSingleton<IPaymentMethodHandler, GrinPaymentMethodHandler>();
         services.AddSingleton<IPaymentLinkExtension, GrinPaymentLinkExtension>();
+        // Renders the Grin logo next to the status pill on the
+        // Invoices list, in the checkout dropdown, and anywhere else
+        // BTCPay calls for a payment-method icon. Without this the
+        // GRIN-CHAIN rows in the Invoices table show no icon.
+        services.AddSingleton<ICheckoutModelExtension, GrinCheckoutModelExtension>();
 
         // Default rate rule for GRIN. Without this, BTCPay's rate
         // engine falls back to `X_X = kraken(X_X)` which fails for
