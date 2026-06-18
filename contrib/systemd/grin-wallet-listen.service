@@ -1,0 +1,26 @@
+[Unit]
+Description=Grin Wallet Foreign-API listener (Tor hidden service for incoming slatepack payments)
+Documentation=https://github.com/Such-Software/btcpayserver-grin-plugin
+After=network-online.target grin-node.service grin-wallet.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=grin
+Group=grin
+# Pass via -p instead of the GRIN_WALLET_PASS env var. The `listen`
+# subcommand falls through to an interactive password prompt when
+# launched under systemd (no TTY) — the env-var path that works for
+# `owner_api` does NOT work here.
+#
+# Replace REPLACE_ME with your wallet password before enabling.
+# For tighter security, move the password to an EnvironmentFile=
+# (mode 0600, root-readable) and pass via shell expansion in the
+# ExecStart — see SETUP.md.
+ExecStart=/usr/local/bin/grin-wallet -p REPLACE_ME -t /home/grin/.grin/main listen
+WorkingDirectory=/home/grin
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

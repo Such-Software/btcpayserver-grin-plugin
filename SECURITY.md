@@ -29,7 +29,7 @@ merchant runs their own `grin-wallet`, the wallet holds the private
 keys, and the plugin only ever sees enough state to construct
 slatepack exchanges and check confirmations. The plugin does **not**
 hold seed phrases, output secrets, or any keying material that would
-let it spend tenant funds independently. What it does hold is the
+let it spend merchant funds independently. What it does hold is the
 wallet's *Owner API* credentials (URL + password + API secret),
 which an attacker could use to drain the wallet — see "What's stored
 in the database" below.
@@ -107,8 +107,8 @@ format is:
 btcpay-sig: sha256=<lowercase-hex>
 ```
 
-Consumers (e.g. Medusa's crypto-checkout providers) must verify this
-signature before acting on the payload. Failure modes worth knowing:
+Webhook consumers must verify this signature before acting on the
+payload. Failure modes worth knowing:
 
 - If you change `WebhookSecret` after invoices exist, those invoices'
   subsequent webhook deliveries will use the new secret. Re-distribute

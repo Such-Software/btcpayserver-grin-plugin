@@ -4,8 +4,14 @@ This guide covers setting up the Grin node, wallet, and BTCPay Server plugin for
 
 ## Prerequisites
 
-- BTCPay Server v2.3.5+ (Docker or bare metal)
+- BTCPay Server v2.3.9+ (Docker or bare metal)
 - A Linux server to run grin-wallet (can be the same machine as BTCPay or separate)
+- The `tor` binary on the wallet host: `sudo apt install tor` then
+  `sudo systemctl disable tor` (we DON'T need Tor as a long-running
+  system service — grin-wallet's `listen` subcommand spawns its own
+  Tor process and needs only the binary available on `$PATH`). Without
+  this, `grin-wallet listen` refuses to start a hidden service and
+  customers paying via slatepack address can't reach your wallet.
 
 ## Architecture
 
@@ -157,6 +163,43 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now grin-wallet
 ```
 
+### Start the Foreign API listener (Tor hidden service)
+
+The Owner API alone is enough for the plugin to *issue* slatepack
+invoices, but customers paying via slatepack address need to reach
+your wallet over Tor to deliver the response. That's a SECOND
+long-lived process: `grin-wallet listen`.
+
+```bash
+grin-wallet -p '<YOUR_WALLET_PASSWORD>' listen
+```
+
+Or install as a systemd service:
+
+```bash
+sudo cp contrib/systemd/grin-wallet-listen.service /etc/systemd/system/
+sudoedit /etc/systemd/system/grin-wallet-listen.service   # replace REPLACE_ME with your wallet password
+sudo systemctl daemon-reload
+sudo systemctl enable --now grin-wallet-listen
+```
+
+**Why two processes?** They share the wallet's LMDB database safely
+but the Owner API and the Foreign API + Tor hidden-service registrar
+have to live in separate processes. Without the listen service the
+slatepack address printed by the wallet is still valid — but no
+process is registering it as a Tor hidden service, so anyone trying
+to reach it gets a Tor circuit-failed and your invoice times out.
+
+**`GRIN_WALLET_PASS` env-var caveat:** the `owner_api` subcommand
+reads the password from the env var fine; the `listen` subcommand
+does not — it falls through to an interactive prompt under systemd
+(no TTY) and fails to start. Pass the password via `-p <pass>` on
+the command line instead. The systemd unit at
+[`contrib/systemd/grin-wallet-listen.service`](contrib/systemd/grin-wallet-listen.service)
+does this. The unit file is mode 644 root-owned; for tighter
+security move the password to an `EnvironmentFile=/etc/grin-wallet.env`
+with mode 0600.
+
 ### Verify the Wallet is Running
 
 ```bash
@@ -248,7 +291,7 @@ If you have SSH access to the server, you can deploy directly to the plugin volu
 ```bash
 # Download and extract the release
 cd /tmp
-VERSION=1.0.10   # see https://github.com/Such-Software/btcpayserver-grin-plugin/releases for the current tag
+VERSION=1.3.0   # check https://github.com/Such-Software/btcpayserver-grin-plugin/releases for the latest tag before pasting
 curl -sL https://github.com/Such-Software/btcpayserver-grin-plugin/releases/download/v${VERSION}/${VERSION}.0.tar.xz -o grin-plugin.tar.xz
 tar xf grin-plugin.tar.xz
 

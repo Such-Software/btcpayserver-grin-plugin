@@ -61,9 +61,21 @@ You'll need three things from your wallet for plugin configuration:
 
 ## Installation
 
-### From BTCPay Plugin Builder (recommended)
+### From the BTCPay plugin directory (recommended)
 
-*Coming soon* — the plugin will be published to the BTCPay plugin directory.
+Open your BTCPay Server admin → **Manage Plugins** → search "Grin" →
+install. Restart BTCPay when prompted. Once loaded, the wallet
+settings live under your store's **Settings → Grin**.
+
+### Manual install from a release artifact
+
+If your BTCPay instance can't reach the plugin directory (e.g.
+restricted egress, self-hosted nightly), download the latest
+`*.btcpay` artifact from the [Releases page][releases] and extract
+into your BTCPay plugins volume. See [`SETUP.md`](SETUP.md) for the
+exact paths.
+
+[releases]: https://github.com/Such-Software/btcpayserver-grin-plugin/releases
 
 ### Manual / Development
 
@@ -248,7 +260,7 @@ GitHub issues. Security issues go via email — see
 Quick PR checklist:
 
 - `dotnet build` clean
-- `dotnet test` green (all 23+ tests)
+- `dotnet test` green
 - `CHANGELOG.md` updated under the current version
 - One logical change per PR
 
