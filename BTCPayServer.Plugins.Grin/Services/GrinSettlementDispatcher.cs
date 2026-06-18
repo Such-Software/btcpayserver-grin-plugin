@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
@@ -59,11 +60,34 @@ public class GrinSettlementDispatcher
         _logger = logger;
     }
 
+    /// <summary>
+    /// Register the customer's payment with BTCPay AS SOON AS we
+    /// broadcast the on-chain transaction (status -> Broadcast),
+    /// not waiting for 10 confirmations to roll in. Two reasons:
+    ///
+    ///   1. <b>BTCPay invoice state</b>: without an AddPayment call,
+    ///      the BTCPay invoice keeps ticking against its 15-minute
+    ///      payment window and flips to Expired before our settlement
+    ///      bridge ever fires. With a Processing-status payment
+    ///      registered, BTCPay moves the invoice to Processing — the
+    ///      canonical "paid, awaiting confirmations" state — same as
+    ///      BTC / LN behave.
+    ///   2. <b>Invoice list icon</b>: the Invoices list renders the
+    ///      payment-method logo by iterating <c>invoice.Payments</c>.
+    ///      Empty Payments => no logo. Registering on Broadcast means
+    ///      the Grin logo shows up the moment the customer pays
+    ///      instead of only after 10 confirmations.
+    ///
+    /// On Confirmed we re-call AddPayment with Status=Settled and let
+    /// BTCPay's PaymentService.UpdatePayments (via the SetStatus
+    /// extension) flip the existing record. PaymentData.Id is keyed
+    /// on tx_slate_id so the second call hits the same row.
+    /// </summary>
     public async Task DispatchSettlement(GrinInvoice invoice, GrinStoreSettings settings)
     {
         if (!string.IsNullOrEmpty(invoice.BtcpayInvoiceId))
         {
-            await DispatchToBtcpay(invoice);
+            await DispatchToBtcpay(invoice, PaymentStatus.Settled);
         }
         else
         {
@@ -71,29 +95,55 @@ public class GrinSettlementDispatcher
         }
     }
 
-    private async Task DispatchToBtcpay(GrinInvoice invoice)
+    /// <summary>
+    /// Called on Broadcast (slatepack finalized, tx posted to the
+    /// network) BEFORE on-chain confirmations land. Registers a
+    /// PaymentStatus.Processing payment with BTCPay so the invoice
+    /// transitions out of the Expired-by-default countdown window
+    /// and the Grin logo appears on the Invoices list immediately.
+    /// </summary>
+    public async Task DispatchBroadcast(GrinInvoice invoice, GrinStoreSettings settings)
+    {
+        if (!string.IsNullOrEmpty(invoice.BtcpayInvoiceId))
+        {
+            try
+            {
+                await DispatchToBtcpay(invoice, PaymentStatus.Processing);
+            }
+            catch (Exception ex)
+            {
+                // Broadcast-time AddPayment is best-effort. If BTCPay
+                // is briefly unavailable here we don't want to fail
+                // the broadcast itself — confirmation-time dispatch
+                // will retry. Log + swallow.
+                _logger.LogWarning(ex,
+                    "DispatchBroadcast soft-failed for Grin invoice {InvoiceId} (BTCPay invoice {BtcpayInvoiceId}); will retry on confirmation",
+                    invoice.Id, invoice.BtcpayInvoiceId);
+            }
+        }
+        else
+        {
+            await _deliveryService.EnqueueDelivery(invoice, settings, "InvoiceProcessing");
+        }
+    }
+
+    private async Task DispatchToBtcpay(GrinInvoice invoice, PaymentStatus status)
     {
         var pmi = GrinPaymentMethodConstants.PaymentMethodId;
         if (!_handlers.TryGetValue(pmi, out var handler))
         {
-            // Shouldn't reach here — Plugin.cs registers the handler
-            // at boot. If it does, throw so the caller's revert path
-            // kicks in and we surface the misconfig in logs.
             _logger.LogError(
-                "Grin payment handler not registered in PaymentMethodHandlerDictionary; cannot dispatch settlement for BTCPay invoice {InvoiceId}",
-                invoice.BtcpayInvoiceId);
+                "Grin payment handler not registered in PaymentMethodHandlerDictionary; cannot dispatch {Status} for BTCPay invoice {InvoiceId}",
+                status, invoice.BtcpayInvoiceId);
             throw new InvalidOperationException("Grin payment handler missing from DI");
         }
 
         var invoiceEntity = await _invoiceRepository.GetInvoice(invoice.BtcpayInvoiceId);
         if (invoiceEntity == null)
         {
-            // BTCPay invoice deleted between issuance and settlement.
-            // Not retriable — the row is gone. Log + return; the
-            // caller's guard stays set so we don't churn.
             _logger.LogWarning(
-                "BTCPay invoice {InvoiceId} not found while dispatching settlement for Grin invoice {GrinInvoiceId}",
-                invoice.BtcpayInvoiceId, invoice.Id);
+                "BTCPay invoice {InvoiceId} not found while dispatching {Status} for Grin invoice {GrinInvoiceId}",
+                invoice.BtcpayInvoiceId, status, invoice.Id);
             return;
         }
 
@@ -102,7 +152,7 @@ public class GrinSettlementDispatcher
         {
             Id = invoice.TxSlateId ?? invoice.Id,
             Created = invoice.PaidAt ?? DateTimeOffset.UtcNow,
-            Status = PaymentStatus.Settled,
+            Status = status,
             Currency = GrinPaymentMethodConstants.CryptoCode,
             InvoiceDataId = invoice.BtcpayInvoiceId,
             Amount = amountGrin,
@@ -120,18 +170,50 @@ public class GrinSettlementDispatcher
         if (payment == null)
         {
             // PaymentService.AddPayment returns null when the
-            // (Id, PaymentMethodId) pair already exists — idempotent
-            // success. The confirmation already landed via a prior
-            // tick or the customer-side /status poll.
-            _logger.LogInformation(
-                "BTCPay payment for Grin invoice {InvoiceId} was already recorded; treating as success",
-                invoice.BtcpayInvoiceId);
+            // (Id, PaymentMethodId) pair already exists. For the
+            // Broadcast→Confirmed promotion that's the EXPECTED case
+            // on the second call: we already registered a Processing
+            // payment at Broadcast, now we want to flip it to
+            // Settled. The existing PaymentEntity (already on the
+            // invoice in BTCPay's DB) needs its Status mutated
+            // in place — re-constructing a fresh PaymentEntity to
+            // pass to UpdatePayments would lose blob fields like
+            // PaidAmount / NetworkFee, so we re-read the live row
+            // off the invoice, set Status, and write back.
+            if (status == PaymentStatus.Settled)
+            {
+                var liveInvoice = await _invoiceRepository.GetInvoice(invoice.BtcpayInvoiceId);
+                var existing = liveInvoice?.GetPayments(false)?
+                    .FirstOrDefault(p =>
+                        p.Id == (invoice.TxSlateId ?? invoice.Id) &&
+                        p.PaymentMethodId == pmi);
+                if (existing != null && existing.Status != PaymentStatus.Settled)
+                {
+                    existing.Status = PaymentStatus.Settled;
+                    await _paymentService.UpdatePayments(new List<PaymentEntity> { existing });
+                    _logger.LogInformation(
+                        "BTCPay payment for Grin invoice {InvoiceId} promoted to Settled (tx_slate_id={TxSlateId})",
+                        invoice.BtcpayInvoiceId, invoice.TxSlateId);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "BTCPay payment for Grin invoice {InvoiceId} already Settled or row missing — treating as success",
+                        invoice.BtcpayInvoiceId);
+                }
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "BTCPay payment for Grin invoice {InvoiceId} was already at status {Status}; treating as success",
+                    invoice.BtcpayInvoiceId, status);
+            }
         }
         else
         {
             _logger.LogInformation(
-                "BTCPay payment recorded for Grin invoice {InvoiceId} (tx_slate_id={TxSlateId}, amount={Amount} GRIN)",
-                invoice.BtcpayInvoiceId, invoice.TxSlateId, amountGrin);
+                "BTCPay payment recorded for Grin invoice {InvoiceId} status={Status} tx_slate_id={TxSlateId} amount={Amount} GRIN",
+                invoice.BtcpayInvoiceId, status, invoice.TxSlateId, amountGrin);
         }
     }
 }

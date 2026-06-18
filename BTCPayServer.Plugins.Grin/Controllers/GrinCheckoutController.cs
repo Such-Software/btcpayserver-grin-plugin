@@ -269,11 +269,11 @@ public class GrinCheckoutController : Controller
             {
                 var updatedInvoice = await _grinService.GetInvoice(invoiceId);
                 if (updatedInvoice != null)
-                    await _deliveryService.EnqueueDelivery(updatedInvoice, settings, "InvoiceProcessing");
+                    await _settlementDispatcher.DispatchBroadcast(updatedInvoice, settings);
             }
             catch (Exception enqEx)
             {
-                _logger.LogWarning(enqEx, "Failed to enqueue broadcast webhook for invoice {InvoiceId}", invoiceId);
+                _logger.LogWarning(enqEx, "Failed to dispatch broadcast for invoice {InvoiceId}", invoiceId);
             }
 
             return Ok(new { status = "Broadcast", invoiceId });
@@ -441,21 +441,20 @@ public class GrinCheckoutController : Controller
             await _grinService.UpdateInvoiceStatus(invoiceId, GrinInvoiceStatus.Broadcast);
             _logger.LogInformation("Grin invoice {InvoiceId} finalized and broadcast", invoiceId);
 
-            // Enqueue the "payment detected" broadcast webhook so Medusa
-            // can transition the cart to "authorized" + create the order
-            // record before chain confirmation arrives. Enqueueing
-            // returns immediately; the worker
-            // (GrinWebhookDeliveryWorker) picks it up within ~5s and
-            // delivers with the same backoff retry policy that protects
-            // the settlement webhook. Pre-2026-06-15 this was a
-            // fire-and-forget HTTP POST that could lose the broadcast
-            // event entirely on contention.
+            // Dispatch broadcast to the right sink — for BTCPay-flow
+            // invoices (BtcpayInvoiceId set) this registers a
+            // PaymentStatus.Processing payment so BTCPay invoice
+            // moves to Processing instead of timing out to Expired,
+            // AND the Grin logo appears on the Invoices list. For
+            // legacy direct-flow invoices it enqueues the same
+            // "InvoiceProcessing" custom webhook the prior code
+            // shipped.
             try
             {
                 var updatedInvoice = await _grinService.GetInvoice(invoiceId);
                 if (updatedInvoice != null)
                 {
-                    await _deliveryService.EnqueueDelivery(updatedInvoice, settings, "InvoiceProcessing");
+                    await _settlementDispatcher.DispatchBroadcast(updatedInvoice, settings);
                 }
             }
             catch (Exception enqEx)
