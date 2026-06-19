@@ -5,6 +5,98 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/). Patch-version-only releases
 are skipped when they fix a single bug — see `git log` for the full history.
 
+## [1.3.1] — 2026-06-18
+
+### Added
+
+- **Two-phase BTCPay payment registration.** The plugin now calls
+  `PaymentService.AddPayment` twice across a payment's lifecycle:
+  - On *Broadcast* (slatepack finalized, transaction posted to the
+    network, 0 confirmations) — registers a `PaymentStatus.Processing`
+    payment so the BTCPay invoice transitions out of its
+    expiration-countdown window into the `Processing` state, the
+    Grin logo appears on the Invoices list immediately, and the
+    operator sees the payment is in-flight.
+  - On *Confirmed* (≥ `MinConfirmations`, default 10) — promotes the
+    existing payment row's `Status` to `Settled` via
+    `UpdatePayments`, which fires the canonical
+    `InvoiceEvent.PaymentSettled` event for downstream webhook
+    consumers.
+
+  Pre-1.3.1, AddPayment only fired on confirmation, so on the
+  operator's Invoices list every in-flight Grin invoice showed as
+  `Expired` (against the default 15-minute window) with no logo
+  until 10 on-chain confirmations promoted it past the countdown.
+  See [`DESIGN.md`](DESIGN.md) for the rationale.
+
+- **`ICheckoutModelExtension` for `GRIN-CHAIN`.** Registers the
+  Grin logo (`Resources/img/grin-logo.png`) so the checkout prompt,
+  the Invoices list, and any other "what does this payment method
+  look like?" surface in BTCPay renders the icon correctly.
+
+- **JSON slatepack-submit endpoint** for external storefronts:
+  `POST /stores/{storeId}/plugins/grin/invoices/{id}/submit`
+  authenticated with the same `CanCreateInvoice` Greenfield scope as
+  invoice creation. Accepts `{ "responseSlatepack": "..." }` and
+  runs the same `decode → finalize → broadcast → enqueue webhook`
+  pipeline as the form-based hosted checkout flow. Integrators that
+  render their own Grin checkout UI (e.g. Medusa) can keep the
+  customer on-domain instead of bouncing to the plugin's hosted
+  view for the paste-response step.
+
+- **`GET /stores/{storeId}/plugins/grin/invoices/{id}`** returns the
+  full GrinInvoice record as JSON (slatepack address, slatepack
+  message, amount, status, confirmations, `BtcpayInvoiceId`). Used
+  by external storefronts that render their own checkout UI and
+  need the slatepack data without scraping the hosted Checkout
+  view.
+
+- **`grin-wallet listen` documentation in [`SETUP.md`](SETUP.md)**
+  including a companion systemd unit at
+  [`contrib/systemd/grin-wallet-listen.service`](contrib/systemd/grin-wallet-listen.service).
+  Operators were missing the second long-running grin-wallet process
+  needed to register the Tor hidden service the slatepack address
+  resolves to — without it, customers paying via `grin-wallet pay`
+  hit an unreachable onion and the invoice times out.
+
+### Changed
+
+- **Amount rounded UP to 0.01 GRIN** at slate-issuance time. The
+  `IPaymentMethodHandler` was previously taking BTCPay's
+  rate-converted GRIN amount at full precision (e.g.
+  `41.069352964 GRIN`) which is unusable to type into a mobile
+  wallet keypad. Rounding to 2 decimals keeps the displayed amount
+  typeable and the on-chain delta is ≤ 0.01 GRIN ≈ $0.00025 at
+  current rates. Always rounds up so the merchant never undercharges.
+
+- **Slatepack address removed from `TrackedDestinations`.** Every
+  Grin invoice issued by the same wallet has the SAME slatepack
+  address (the merchant's static wallet address — there are no
+  per-invoice fresh addresses like BTC). Adding it to BTCPay's
+  `AddressInvoice` table succeeded for the first invoice but threw
+  a unique-constraint violation (`PK_AddressInvoices`) on every
+  subsequent Greenfield-flow invoice with `GRIN-CHAIN`, returning
+  500 to the caller. Tracking by `txSlateId` via
+  `AdditionalSearchTerms` is preserved.
+
+### Docs
+
+- README.md: real install instructions for the BTCPay plugin
+  directory; removed stale "23+ tests" claim and "Coming soon"
+  marker. SECURITY.md: language polish for public release. SETUP.md:
+  prerequisites now list `tor` (required by `grin-wallet listen` to
+  spawn its embedded Tor process); version reference bumped to the
+  current release; `GRIN_WALLET_PASS` env-var caveat documented for
+  the `listen` subcommand.
+
+- New [`DESIGN.md`](DESIGN.md) captures four load-bearing
+  architectural decisions: why two grin-wallet processes
+  (`owner_api` + `listen`), why we run grin-wallet's embedded Tor
+  instead of sharing BTCPay's, why the plugin uses `IssueInvoiceTx`
+  exclusively (vs sender-initiated sends, which produce a
+  `tx_slate_id` we can't associate back to the original invoice),
+  and why integrators get the JSON slatepack-submit endpoint.
+
 ## [1.3.0] — 2026-06-15
 
 ### Added
