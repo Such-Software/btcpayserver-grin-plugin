@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using BTCPayServer;
 using BTCPayServer.Data;
+using BTCPayServer.Events;
 using BTCPayServer.Payments;
 using BTCPayServer.Plugins.Grin.Data;
 using BTCPayServer.Plugins.Grin.Payments;
@@ -44,6 +46,7 @@ public class GrinSettlementDispatcher
     private readonly PaymentService _paymentService;
     private readonly InvoiceRepository _invoiceRepository;
     private readonly PaymentMethodHandlerDictionary _handlers;
+    private readonly EventAggregator _eventAggregator;
     private readonly ILogger<GrinSettlementDispatcher> _logger;
 
     public GrinSettlementDispatcher(
@@ -51,12 +54,14 @@ public class GrinSettlementDispatcher
         PaymentService paymentService,
         InvoiceRepository invoiceRepository,
         PaymentMethodHandlerDictionary handlers,
+        EventAggregator eventAggregator,
         ILogger<GrinSettlementDispatcher> logger)
     {
         _deliveryService = deliveryService;
         _paymentService = paymentService;
         _invoiceRepository = invoiceRepository;
         _handlers = handlers;
+        _eventAggregator = eventAggregator;
         _logger = logger;
     }
 
@@ -211,6 +216,20 @@ public class GrinSettlementDispatcher
         }
         else
         {
+            // Publish ReceivedPayment so BTCPay's InvoiceWatcher
+            // recomputes the parent invoice's state — without this
+            // the AddPayment row exists in the DB but the invoice
+            // stays at "New" forever (matches Bitcoin/Lightning
+            // pattern at LightningListener.cs:666 and
+            // NBXplorerListener.cs:185). InvoiceWatcher reads
+            // payment.Accounted (Processing or Settled) and
+            // promotes the invoice to Processing → Settled
+            // accordingly. Without the event, no recompute fires.
+            _eventAggregator.Publish(
+                new InvoiceEvent(invoiceEntity, InvoiceEvent.ReceivedPayment)
+                {
+                    Payment = payment,
+                });
             _logger.LogInformation(
                 "BTCPay payment recorded for Grin invoice {InvoiceId} status={Status} tx_slate_id={TxSlateId} amount={Amount} GRIN",
                 invoice.BtcpayInvoiceId, status, invoice.TxSlateId, amountGrin);

@@ -5,6 +5,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/). Patch-version-only releases
 are skipped when they fix a single bug — see `git log` for the full history.
 
+## [1.3.2] — 2026-06-19
+
+### Fixed
+
+- **BTCPay invoice state stayed at `New` after Broadcast payment
+  registered.** v1.3.1's two-phase bridge correctly called
+  `PaymentService.AddPayment(Status=Processing)` on Broadcast, but
+  the parent BTCPay invoice's status never transitioned out of
+  `New` even with `paidAmount == amount`. Root cause: BTCPay's
+  `InvoiceWatcher` only recomputes invoice state in response to
+  the `InvoiceEvent.ReceivedPayment` event — the AddPayment call
+  alone doesn't trigger it. Matches the canonical pattern at
+  `LightningListener.cs:666` and `NBXplorerListener.cs:185`:
+  publish the event manually after every successful AddPayment.
+  `GrinSettlementDispatcher` now takes `EventAggregator` and
+  publishes `ReceivedPayment` so the invoice promotes
+  `New → Processing → Settled` correctly.
+
 ## [1.3.1] — 2026-06-18
 
 ### Added
