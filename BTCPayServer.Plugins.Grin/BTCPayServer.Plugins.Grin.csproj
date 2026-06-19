@@ -19,7 +19,7 @@
   <PropertyGroup>
     <Product>Grin Payments</Product>
     <Description>Accept Grin (MimbleWimble) payments via Slatepack.</Description>
-    <Version>1.3.2</Version>
+    <Version>1.3.3</Version>
     <Authors>Such Software LLC</Authors>
     <Company>Such Software LLC</Company>
     <Copyright>Copyright © Such Software LLC</Copyright>

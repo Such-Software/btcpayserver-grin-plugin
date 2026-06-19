@@ -5,6 +5,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/). Patch-version-only releases
 are skipped when they fix a single bug — see `git log` for the full history.
 
+## [1.3.3] — 2026-06-19
+
+### Fixed
+
+- **InvoiceWatcher could miss the recompute window when payment
+  arrived between scheduled Wait() ticks.** Even with v1.3.2's
+  `ReceivedPayment` event publish on the AddPayment-success path,
+  an invoice registered under a previous plugin version (or whose
+  `Wait()` watch lease elapsed before the payment landed) wouldn't
+  ever re-evaluate. The dispatcher now also publishes
+  `InvoiceNeedUpdateEvent(BtcpayInvoiceId)` on the
+  "AddPayment-returned-null" path (i.e. payment already exists, no
+  ReceivedPayment fires), which `InvoiceWatcher` subscribes to and
+  uses to re-Watch the invoice. Recovers stuck invoices on the
+  next dispatch (typically the Confirmed → Settled promotion).
+
 ## [1.3.2] — 2026-06-19
 
 ### Fixed

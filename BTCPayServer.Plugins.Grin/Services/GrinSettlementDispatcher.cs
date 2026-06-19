@@ -213,6 +213,18 @@ public class GrinSettlementDispatcher
                     "BTCPay payment for Grin invoice {InvoiceId} was already at status {Status}; treating as success",
                     invoice.BtcpayInvoiceId, status);
             }
+            // Even on the "already exists" path, nudge InvoiceWatcher
+            // to re-evaluate the invoice's state. Two-fold purpose:
+            //   1. Recovers invoices stuck at "New" from pre-1.3.2
+            //      installations where the AddPayment-on-Broadcast
+            //      call didn't publish ReceivedPayment.
+            //   2. Safety net for any case where the InvoiceWatcher's
+            //      scheduled Wait() tick fired between AddPayment
+            //      registering the payment and BTCPay's recompute
+            //      window seeing it — the watcher dequeues the
+            //      invoice on a single Wait() pass; without re-Watch
+            //      events the invoice would never re-evaluate.
+            _eventAggregator.Publish(new InvoiceNeedUpdateEvent(invoice.BtcpayInvoiceId));
         }
         else
         {
