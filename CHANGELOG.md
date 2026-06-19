@@ -5,6 +5,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/). Patch-version-only releases
 are skipped when they fix a single bug — see `git log` for the full history.
 
+## [1.3.4] — 2026-06-19
+
+### Fixed
+
+- **Removed dead-code ceiling-rounding in IPaymentMethodHandler that
+  caused every BTCPay invoice to render as "Processing (paid over)".**
+  Earlier versions rounded the slate amount UP to 0.01 GRIN at
+  issuance time so customers could type the amount into a mobile
+  wallet keypad for the bare-address QR flow. That flow was removed
+  (the slate_id-mismatch problem) but the rounding stayed as dead
+  code. Result: slate signed for 40.98 GRIN, BTCPay tracking 40.974
+  GRIN due, on-chain payment 40.98 → 0.006 GRIN over → flagged. For
+  invoice-flow payments the customer's wallet pays exactly what the
+  slate carries, no typing — so the rounding served no purpose, only
+  introduced the overpayment artifact. Slates now issue at the
+  exact `Calculate().Due` amount in nanogrin (the smallest indivisible
+  unit), removing the artifact entirely.
+
 ## [1.3.3] — 2026-06-19
 
 ### Fixed

@@ -106,15 +106,22 @@ public class GrinPaymentMethodHandler : IPaymentMethodHandler
         }
 
         var due = context.Prompt.Calculate().Due;
-        // PaymentPrompt amounts are in the base currency (GRIN). Round UP
-        // to TWO decimal places of GRIN before converting to nanogrin so
-        // customers can type a sane amount into their wallet (e.g. 41.07
-        // instead of 41.069352964). With GRIN/USD around $0.025, the
-        // largest rounding overcharge is ~$0.00025 — well within the
-        // noise of crypto rate movement and orders of magnitude smaller
-        // than what's saved by not making customers type nine decimals.
-        var grinAmount = Math.Ceiling(due * 100m) / 100m;
-        var amountNanogrin = (long)(grinAmount * 1_000_000_000m);
+        // PaymentPrompt amounts are in the base currency (GRIN); convert
+        // to nanogrin (1 GRIN = 1e9 nanogrin) at full precision. The
+        // slate is signed for THIS exact amount and the customer's
+        // wallet pays exactly this — there's no "type the amount"
+        // step for invoice-flow payments (the customer scans our
+        // slatepack QR and confirms; the slate carries the amount).
+        //
+        // Earlier versions rounded UP to 0.01 GRIN for the bare-address
+        // QR flow where the customer DID type the amount in their
+        // wallet keypad. That flow was removed (the slate_id mismatch
+        // problem — payments via bare address couldn't be associated
+        // back to invoices). The rounding stuck around as dead code
+        // and caused 'Processing (paid over)' on every BTCPay invoice:
+        // slate for 40.98 GRIN, BTCPay tracking 40.974 due, on-chain
+        // 40.98 paid → 0.006 GRIN over → flagged. Removed.
+        var amountNanogrin = (long)Math.Round(due * 1_000_000_000m);
 
         var client = await _rpcProvider.GetClient(settings);
         var invoiceResult = await client.IssueInvoiceTx(amountNanogrin,
