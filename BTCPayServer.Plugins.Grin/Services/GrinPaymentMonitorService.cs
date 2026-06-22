@@ -51,6 +51,7 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
     {
         try
         {
+            await PromoteExternallyBroadcastInvoices();
             await CheckBroadcastInvoices();
             await RetryUnsignaledSettlements();
             await CheckForReorgs();
@@ -59,6 +60,101 @@ public class GrinPaymentMonitorService : IHostedService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Grin payment monitor error");
+        }
+    }
+
+    /// <summary>
+    /// Promote Pending/AwaitingResponse invoices to Broadcast when the
+    /// merchant's grin-wallet has already finalized their slate via a
+    /// channel the plugin doesn't see (i.e. the customer pushed the
+    /// signed Invoice2 directly to the wallet's foreign-api over Tor,
+    /// rather than pasting back into the storefront's `/submit`
+    /// endpoint).
+    ///
+    /// Detection signal: RetrieveTxs(tx_slate_id) returns an entry
+    /// with a populated `kernel_excess` — that field is null at
+    /// `issue_invoice_tx` time and only set during `finalize_tx`. Its
+    /// presence is a reliable "merchant signed + broadcast" marker
+    /// regardless of whether the kernel has been mined yet.
+    ///
+    /// Once promoted, CheckBroadcastInvoices on the same tick tracks
+    /// confirmations and Dispatches Processing/Settled exactly as it
+    /// does for the paste-back path. This keeps the channel-agnostic
+    /// invariant: a confirmed payment to the merchant's wallet ALWAYS
+    /// settles the invoice, regardless of how the slate got there.
+    /// </summary>
+    private async Task PromoteExternallyBroadcastInvoices()
+    {
+        var pending = await _grinService.GetPendingInvoices();
+
+        foreach (var invoice in pending)
+        {
+            if (invoice.Status != GrinInvoiceStatus.Pending &&
+                invoice.Status != GrinInvoiceStatus.AwaitingResponse)
+                continue;
+
+            if (string.IsNullOrEmpty(invoice.TxSlateId))
+                continue;
+
+            try
+            {
+                var settings = await _grinService.GetStoreSettings(invoice.StoreId);
+                if (settings == null || !settings.Enabled)
+                    continue;
+
+                var client = await _rpcProvider.GetClient(settings);
+
+                var txResult = await client.RetrieveTxs(invoice.TxSlateId);
+                if (!txResult.TryGetProperty("Ok", out var okResult))
+                    continue;
+
+                JsonElement txList = (okResult.ValueKind == JsonValueKind.Array && okResult.GetArrayLength() >= 2)
+                    ? okResult[1]
+                    : okResult;
+                if (txList.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                foreach (var tx in txList.EnumerateArray())
+                {
+                    // kernel_excess null → not finalized yet → still
+                    // waiting on customer. kernel_excess populated →
+                    // merchant's wallet already called finalize_tx.
+                    var hasKernel = tx.TryGetProperty("kernel_excess", out var kex)
+                                    && kex.ValueKind != JsonValueKind.Null;
+                    if (!hasKernel)
+                        continue;
+
+                    await _grinService.UpdateInvoiceStatus(
+                        invoice.Id, GrinInvoiceStatus.Broadcast);
+
+                    _logger.LogInformation(
+                        "Invoice {InvoiceId} externally broadcast (likely Tor finalize_tx) — promoted to Broadcast",
+                        invoice.Id);
+
+                    invoice.Status = GrinInvoiceStatus.Broadcast;
+                    try
+                    {
+                        await _settlementDispatcher.DispatchBroadcast(invoice, settings);
+                    }
+                    catch (Exception dispatchEx)
+                    {
+                        // DispatchBroadcast is already best-effort
+                        // internally; mirror the same log shape used
+                        // by the paste-back controller path.
+                        _logger.LogWarning(dispatchEx,
+                            "DispatchBroadcast soft-failed for externally-broadcast invoice {InvoiceId}",
+                            invoice.Id);
+                    }
+
+                    break;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to check external-broadcast status for invoice {InvoiceId}",
+                    invoice.Id);
+            }
         }
     }
 

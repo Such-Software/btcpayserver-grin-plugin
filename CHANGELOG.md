@@ -5,6 +5,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/). Patch-version-only releases
 are skipped when they fix a single bug — see `git log` for the full history.
 
+## [1.3.5] — 2026-06-22
+
+### Fixed
+
+- **Monitor now detects payments delivered to the wallet outside the
+  storefront paste-back flow.** When a customer signs an Invoice2 and
+  pushes it directly to the merchant's `grin-wallet listen`
+  foreign-api over Tor (e.g. a future mobile wallet auto-replies on
+  scan, or a CLI `grin-wallet pay --ret-address`), the merchant's
+  wallet finalizes + broadcasts via its local node but the plugin's
+  controller never runs — so the invoice was left at status `Pending`
+  forever even after the kernel mined. The monitor's tick now also
+  scans Pending/AwaitingResponse invoices: if the wallet's tx_log
+  reports a populated `kernel_excess` for the recorded slate_id, the
+  invoice is promoted to `Broadcast` and `DispatchBroadcast` fires
+  the Processing payment, exactly mirroring the paste-back path.
+  Once promoted, the existing confirmation-tracking loop carries it
+  to Settled. Effect: plugin is now channel-agnostic — any payment
+  that reaches the merchant's wallet (paste-back, Tor auto-reply,
+  CLI send, future grin:// URI) settles the invoice.
+
 ## [1.3.4] — 2026-06-19
 
 ### Fixed
